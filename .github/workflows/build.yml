@@ -196,71 +196,71 @@ jobs:
 
               private fun startScreenScan() {
               val dm = resources.displayMetrics
-val w = dm.widthPixels / 2
-val h = dm.heightPixels / 2
-ir = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
-vd = mp?.createVirtualDisplay("TxScan", w, h, dm.densityDpi, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, ir?.surface, null, null)
-handler.postDelayed(scanRunnable, 2500)
-}
-private val scanRunnable = object : Runnable {
-override fun run() {
-val img = ir?.acquireLatestImage()
-if (img != null) {
-val plane = img.planes[0]
-val buf = plane.buffer
-val bmp = Bitmap.createBitmap(plane.rowStride / plane.pixelStride, img.height, Bitmap.Config.ARGB_8888)
-bmp.copyPixelsFromBuffer(buf)
-img.close()
-analyzeScreen(bmp)
-}
-handler.postDelayed(this, 2500)
-}
-}
-private fun analyzeScreen(bmp: Bitmap) {
-val image = InputImage.fromBitmap(bmp, 0)
-recognizer.process(image).addOnSuccessListener { visionText ->
-val raw = visionText.text.uppercase()
-val detected = when {
-raw.contains("TAI") || raw.contains("TÀI") -> "T"
-raw.contains("XIU") || raw.contains("XỈU") -> "X"
-else -> ""
-}
-if (detected.isNotEmpty() && detected != lastDetected) {
-lastDetected = detected
-history.add(detected)
-if (history.size > 10) history.removeAt(0)
-val nextCall = predictNext()
-val textCall = if (nextCall == "T") "Tai" else "Xiu"
-view.findViewById(R.id.tvStatus).text = "Chot: $textCall"
-view.findViewById(R.id.tvHistory).text = "Cau: ${history.joinToString("-")}"
-if (ready) tts.speak("Van sau danh $textCall", TextToSpeech.QUEUE_FLUSH, null, null)
-}
-}
-}
-private fun predictNext(): String {
-if (history.size < 2) return history.lastOrNull() ?: "T"
-val last = history.last()
-val prev = history[history.size - 2]
-return if (last == prev) last else if (last == "T") "X" else "T"
-}
-override fun onInit(s: Int) {
-if (s == 0) ready = tts.setLanguage(Locale("vi", "VN")) >= 0
-}
-override fun onDestroy() {
-super.onDestroy()
-handler.removeCallbacks(scanRunnable)
-vd?.release()
-ir?.close()
-mp?.stop()
-if (::view.isInitialized) wm.removeView(view)
-if (::tts.isInitialized) { tts.stop(); tts.shutdown() }
-}
-}""")
-'
-- name: Build Debug APK
-run: gradle assembleDebug
-- name: Upload APK
-uses: actions/upload-artifact@v4
-with:
-name: TX-AI-Overlay-APK
-path: '**/build/outputs/apk/debug/*.apk'
+              val w = dm.widthPixels / 2
+              val h = dm.heightPixels / 2
+              ir = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+              vd = mp?.createVirtualDisplay("TxScan", w, h, dm.densityDpi, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, ir?.surface, null, null)
+              handler.postDelayed(scanRunnable, 2500)
+              }
+              private val scanRunnable = object : Runnable {
+              override fun run() {
+              val img = ir?.acquireLatestImage()
+              if (img != null) {
+              val plane = img.planes[0]
+              val buf = plane.buffer
+              val bmp = Bitmap.createBitmap(plane.rowStride / plane.pixelStride, img.height, Bitmap.Config.ARGB_8888)
+              bmp.copyPixelsFromBuffer(buf)
+              img.close()
+              analyzeScreen(bmp)
+              }
+              handler.postDelayed(this, 2500)
+              }
+              }
+              private fun analyzeScreen(bmp: Bitmap) {
+              val image = InputImage.fromBitmap(bmp, 0)
+              recognizer.process(image).addOnSuccessListener { visionText ->
+              val raw = visionText.text.uppercase()
+              val detected = when {
+              raw.contains("TAI") || raw.contains("TÀI") -> "T"
+              raw.contains("XIU") || raw.contains("XỈU") -> "X"
+              else -> ""
+              }
+              if (detected.isNotEmpty() && detected != lastDetected) {
+              lastDetected = detected
+              history.add(detected)
+              if (history.size > 10) history.removeAt(0)
+              val nextCall = predictNext()
+              val textCall = if (nextCall == "T") "Tai" else "Xiu"
+              view.findViewById(R.id.tvStatus).text = "Chot: $textCall"
+              view.findViewById(R.id.tvHistory).text = "Cau: ${history.joinToString("-")}"
+              if (ready) tts.speak("Van sau danh $textCall", TextToSpeech.QUEUE_FLUSH, null, null)
+              }
+              }
+              }
+              private fun predictNext(): String {
+              if (history.size < 2) return history.lastOrNull() ?: "T"
+              val last = history.last()
+              val prev = history[history.size - 2]
+              return if (last == prev) last else if (last == "T") "X" else "T"
+              }
+              override fun onInit(s: Int) {
+              if (s == 0) ready = tts.setLanguage(Locale("vi", "VN")) >= 0
+              }
+              override fun onDestroy() {
+              super.onDestroy()
+              handler.removeCallbacks(scanRunnable)
+              vd?.release()
+              ir?.close()
+              mp?.stop()
+              if (::view.isInitialized) wm.removeView(view)
+              if (::tts.isInitialized) { tts.stop(); tts.shutdown() }
+              }
+              }""")
+              '
+              - name: Build Debug APK
+              run: gradle assembleDebug
+              - name: Upload APK
+              uses: actions/upload-artifact@v4
+              with:
+              name: TX-AI-Overlay-APK
+              path: '**/build/outputs/apk/debug/*.apk'
