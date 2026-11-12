@@ -332,9 +332,9 @@ class OverlayService : Service() {
             // Bỏ qua biểu đồ xúc xắc phía dưới.
 
             val left = (bitmap.width * 0.29f).toInt()
-            val top = (bitmap.height * 0.21f).toInt()
+            val top = (bitmap.height * 0.29f).toInt()
             val right = (bitmap.width * 0.73f).toInt()
-            val bottom = (bitmap.height * 0.44f).toInt()
+            val bottom = (bitmap.height * 0.52f).toInt()
 
             if (
                 right <= left ||
