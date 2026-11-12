@@ -22,20 +22,141 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Auto Generate Project
+        run: |
+          python3 -c '
+          import os
+          os.makedirs("app/src/main/java/com/txai/overlay", exist_ok=True)
+          os.makedirs("app/src/main/res/layout", exist_ok=True)
+          ns = "".join(["http", "://", "schemas.", "android", ".com/apk/res/android"])
+
+          with open("app/src/main/AndroidManifest.xml", "w") as f:
+              f.write(f"""<?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="{ns}">
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+              <application android:allowBackup="true" android:label="Tx-ai" android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service android:name=".FloatingBotService" android:enabled="true" android:exported="false" android:foregroundServiceType="specialUse" />
+              </application>
+          </manifest>""")
+
+          with open("app/src/main/res/layout/layout_floating_bot.xml", "w") as f:
+              f.write(f"""<?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="{ns}" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="#CC000000" android:orientation="vertical" android:padding="12dp">
+              <TextView android:id="@+id/tvStatus" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Tx-AI: San sang" android:textColor="#00FF00" android:textSize="14sp" android:textStyle="bold" />
+              <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal">
+                  <Button android:id="@+id/btnAnalyze" android:layout_width="wrap_content" android:layout_height="36dp" android:text="Doc KQ" android:textSize="12sp" />
+                  <Button android:id="@+id/btnClose" android:layout_width="wrap_content" android:layout_height="36dp" android:layout_marginStart="6dp" android:text="Tat" android:textSize="12sp" />
+              </LinearLayout>
+          </LinearLayout>""")
+
+          with open("app/src/main/java/com/txai/overlay/MainActivity.kt", "w") as f:
+              f.write("""package com.txai.overlay
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.widget.Button
+          import android.widget.Toast
+          import androidx.appcompat.app.AppCompatActivity
+
+          class MainActivity : AppCompatActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  val btnStart = Button(this).apply {
+                      text = "Bat Bot Tx-AI"
+                      setOnClickListener { checkOverlayPermission() }
+                  }
+                  setContentView(btnStart)
+              }
+              private fun checkOverlayPermission() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                      Toast.makeText(this, "Vui long cap quyen hien thi tren ung dung khac", Toast.LENGTH_LONG).show()
+                      startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                  } else {
+                      val intent = Intent(this, FloatingBotService::class.java)
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+                      finish()
+                  }
+              }
+          }""")
+
+          with open("app/src/main/java/com/txai/overlay/FloatingBotService.kt", "w") as f:
+              f.write("""package com.txai.overlay
+          import android.app.*
+          import android.content.Intent
+          import android.graphics.PixelFormat
+          import android.os.*
+          import android.speech.tts.TextToSpeech
+          import android.view.*
+          import android.widget.*
+          import androidx.core.app.NotificationCompat
+          import java.util.Locale
+
+          class FloatingBotService : Service(), TextToSpeech.OnInitListener {
+              private lateinit var wm: WindowManager
+              private lateinit var view: View
+              private lateinit var tts: TextToSpeech
+              private var ready = false
+
+              override fun onBind(intent: Intent?): IBinder? = null
+
+              override fun onCreate() {
+                  super.onCreate()
+                  val cid = "tx_ai_bot"
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(cid, "Tx-AI", NotificationManager.IMPORTANCE_LOW))
+                  }
+                  startForeground(1, NotificationCompat.Builder(this, cid).setContentTitle("Tx-AI dang chay").setSmallIcon(android.R.drawable.ic_dialog_info).build())
+                  tts = TextToSpeech(this, this)
+                  view = LayoutInflater.from(this).inflate(R.layout.layout_floating_bot, null)
+                  val flag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
+                  val p = WindowManager.LayoutParams(-2, -2, flag, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply {
+                      gravity = Gravity.TOP or Gravity.START; x = 100; y = 200
+                  }
+                  wm = getSystemService(WINDOW_SERVICE) as WindowManager
+                  wm.addView(view, p)
+                  val tv = view.findViewById<TextView>(R.id.tvStatus)
+                  view.setOnTouchListener(object : View.OnTouchListener {
+                      var ix = 0; var iy = 0; var itx = 0f; var ity = 0f
+                      override fun onTouch(v: View, e: MotionEvent): Boolean {
+                          if (e.action == MotionEvent.ACTION_DOWN) { ix = p.x; iy = p.y; itx = e.rawX; ity = e.rawY; return true }
+                          if (e.action == MotionEvent.ACTION_MOVE) { p.x = ix + (e.rawX - itx).toInt(); p.y = iy + (e.rawY - ity).toInt(); wm.updateViewLayout(view, p); return true }
+                          return false
+                      }
+                  })
+                  view.findViewById<Button>(R.id.btnAnalyze).setOnClickListener {
+                      val kq = listOf("Tai", "Xiu").random()
+                      tv.text = "Du doan: $kq"
+                      if (ready) tts.speak("Ket qua la $kq", TextToSpeech.QUEUE_FLUSH, null, null)
+                  }
+                  view.findViewById<Button>(R.id.btnClose).setOnClickListener { stopSelf() }
+              }
+
+              override fun onInit(s: Int) {
+                  if (s == TextToSpeech.SUCCESS) ready = tts.setLanguage(Locale("vi", "VN")) >= 0
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  if (::view.isInitialized) wm.removeView(view)
+                  if (::tts.isInitialized) { tts.stop(); tts.shutdown() }
+              }
+          }""")
+          '
+
       - name: Build Debug APK
         run: |
-          PROJECT_DIR=$(find . -maxdepth 3 \( -name "settings.gradle" -o -name "settings.gradle.kts" \) -exec dirname {} \; | head -n 1)
-          if [ -n "$PROJECT_DIR" ]; then
-            cd "$PROJECT_DIR"
-          fi
-          sed -i 's|android.com"|://android.com"|g' app/src/main/AndroidManifest.xml || true
-          sed -i 's|android.com"|://android.com"|g' app/src/main/res/layout/layout_floating_bot.xml || true
-          if [ -f "./gradlew" ]; then
-            chmod +x gradlew
-            ./gradlew assembleDebug
-          else
-            gradle assembleDebug
-          fi
+          chmod +x gradlew || true
+          ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
