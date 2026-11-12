@@ -66,9 +66,7 @@ class OverlayService : Service() {
         flags: Int,
         startId: Int
     ): Int {
-
-        val resultCode =
-            intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
+        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
 
         val resultData: Intent? =
             if (Build.VERSION.SDK_INT >= 33) {
@@ -93,10 +91,7 @@ class OverlayService : Service() {
                 Context.MEDIA_PROJECTION_SERVICE
             ) as MediaProjectionManager
 
-            projection = manager.getMediaProjection(
-                resultCode,
-                resultData
-            )
+            projection = manager.getMediaProjection(resultCode, resultData)
 
             val metrics = resources.displayMetrics
             val width = metrics.widthPixels
@@ -122,7 +117,6 @@ class OverlayService : Service() {
 
                     try {
                         val bitmap = imageToBitmap(image)
-
                         synchronized(bitmapLock) {
                             lastBitmap?.recycle()
                             lastBitmap = bitmap
@@ -177,17 +171,15 @@ class OverlayService : Service() {
                 "TX AI Screen Capture",
                 NotificationManager.IMPORTANCE_LOW
             )
-
             getSystemService(NotificationManager::class.java)
                 .createNotificationChannel(channel)
         }
 
-        val builder =
-            if (Build.VERSION.SDK_INT >= 26) {
-                Notification.Builder(this, CHANNEL_ID)
-            } else {
-                Notification.Builder(this)
-            }
+        val builder = if (Build.VERSION.SDK_INT >= 26) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            Notification.Builder(this)
+        }
 
         val notification = builder
             .setContentTitle("TX AI đang hoạt động")
@@ -245,7 +237,6 @@ class OverlayService : Service() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(16, 12, 16, 12)
-
             background = GradientDrawable().apply {
                 setColor(Color.rgb(28, 28, 28))
                 cornerRadius = 18f
@@ -301,80 +292,17 @@ class OverlayService : Service() {
         panel = root
     }
 
-    
-private fun analyzeScreen() {
-    val bitmap = synchronized(bitmapLock) {
-        lastBitmap?.copy(Bitmap.Config.ARGB_8888, false)
-    }
-
-    if (bitmap == null) {
-        status?.text = "Chưa nhận được ảnh màn hình"
-        return
-    }
-
-    status?.text = "Đang phân tích lịch sử..."
-
-    try {
-        if (recognizer == null) {
-            recognizer = TextRecognition.getClient(
-                TextRecognizerOptions.DEFAULT_OPTIONS
-            )
+    private fun analyzeScreen() {
+        val bitmap = synchronized(bitmapLock) {
+            lastBitmap?.copy(Bitmap.Config.ARGB_8888, false)
         }
-
-        recognizer!!.process(InputImage.fromBitmap(bitmap, 0))
-            .addOnSuccessListener { result ->
-
-                val width = bitmap.width
-                val height = bitmap.height
-
-                val scores = result.textBlocks
-                    .flatMap { it.lines }
-                    .filter { line ->
-                        val box = line.boundingBox
-                        box != null &&
-                        box.left > width * 0.28 &&
-                        box.right < width * 0.75 &&
-                        box.top > height * 0.20 &&
-                        box.bottom < height * 0.58
-                    }
-                    .mapNotNull { line ->
-                        Regex("\\b(1[0-7]|[4-9])\\b")
-                            .find(line.text)?.value?.toIntOrNull()
-                    }
-                    .take(30)
-
-                status?.text = if (scores.isEmpty()) {
-                    "Chưa đọc được tổng điểm. Hãy mở biểu đồ lịch sử."
-                } else {
-                    val outcomes = scores.map {
-                        if (it >= 11) "T" else "X"
-                    }
-
-                    "TỔNG ĐIỂM: ${scores.joinToString("-")}\n" +
-                    "CẦU: ${outcomes.joinToString("-")}\n" +
-                    "Đã đọc ${scores.size} số"
-                }
-            }
-            .addOnFailureListener { error ->
-                status?.text = "Lỗi OCR: ${error.message}"
-            }
-            .addOnCompleteListener {
-                bitmap.recycle()
-            }
-
-    } catch (e: Exception) {
-        bitmap.recycle()
-        status?.text = "Lỗi: ${e.message}"
-    }
-}
-
 
         if (bitmap == null) {
             status?.text = "Chưa nhận được ảnh màn hình"
             return
         }
 
-        status?.text = "Đang đọc chữ..."
+        status?.text = "Đang đọc chữ trên màn hình..."
 
         try {
             if (recognizer == null) {
@@ -383,33 +311,49 @@ private fun analyzeScreen() {
                 )
             }
 
-            recognizer!!
-                .process(InputImage.fromBitmap(bitmap, 0))
-                .addOnSuccessListener { result ->
-                    status?.text = if (result.text.isBlank()) {
-                        "Không tìm thấy chữ"
+            recognizer?.process(InputImage.fromBitmap(bitmap, 0))
+                ?.addOnSuccessListener { result ->
+                    val scores = Regex("\\b(1[0-7]|[4-9])\\b")
+                        .findAll(result.text)
+                        .mapNotNull { it.value.toIntOrNull() }
+                        .distinct()
+                        .take(30)
+                        .toList()
+
+                    status?.text = if (scores.isEmpty()) {
+                        "Không đọc được tổng điểm. Hãy mở lịch sử."
                     } else {
-                        result.text.take(500)
+                        val outcomes = scores.map {
+                            if (it >= 11) "Tài" else "Xỉu"
+                        }
+
+                        "ĐIỂM: ${scores.joinToString("-")}\n" +
+                        "KẾT QUẢ: ${outcomes.joinToString("-")}\n" +
+                        "Đã đọc ${scores.size} số"
                     }
                 }
-                .addOnFailureListener { error ->
+                ?.addOnFailureListener { error ->
                     status?.text = "Lỗi OCR: ${error.message}"
                 }
-                .addOnCompleteListener {
+                ?.addOnCompleteListener {
                     bitmap.recycle()
                 }
 
         } catch (e: Exception) {
             bitmap.recycle()
-            status?.text = "Lỗi OCR: ${e.message}"
+            status?.text = "Lỗi: ${e.message}"
         }
     }
 
     override fun onDestroy() {
         virtualDisplay?.release()
+        virtualDisplay = null
+
         imageReader?.close()
+        imageReader = null
 
         projection?.stop()
+        projection = null
 
         synchronized(bitmapLock) {
             lastBitmap?.recycle()
@@ -425,6 +369,7 @@ private fun analyzeScreen() {
                 wm.removeView(it)
             }
         }
+        panel = null
 
         recognizer?.close()
         recognizer = null
