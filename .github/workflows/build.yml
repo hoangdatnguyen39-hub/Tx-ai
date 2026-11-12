@@ -27,8 +27,16 @@ jobs:
           PROJECT_DIR=$(find . -maxdepth 3 \( -name "settings.gradle" -o -name "settings.gradle.kts" \) -exec dirname {} \; | head -n 1)
           if [ -n "$PROJECT_DIR" ]; then
             cd "$PROJECT_DIR"
-          fi
-          if [ -f "./gradlew" ]; then
+          fi       - name: Fix Manifest Namespace
+        run: |
+          sed -i 's|http://android.com|http://android.com|g' app/src/main/AndroidManifest.xml
+          sed -i 's|http://android.com|http://android.com|g' app/src/main/res/layout/layout_floating_bot.xml
+          
+          if [ -f "./gradlew" ]; then       - name: Fix Manifest Namespace
+        run: |
+          sed -i 's|http://android.com|http://android.com|g' app/src/main/AndroidManifest.xml
+          sed -i 's|http://android.com|http://android.com|g' app/src/main/res/layout/layout_floating_bot.xml
+          
             chmod +x gradlew
             ./gradlew assembleDebug
           else
