@@ -301,10 +301,73 @@ class OverlayService : Service() {
         panel = root
     }
 
-    private fun analyzeScreen() {
-        val bitmap = synchronized(bitmapLock) {
-            lastBitmap?.copy(Bitmap.Config.ARGB_8888, false)
+    
+private fun analyzeScreen() {
+    val bitmap = synchronized(bitmapLock) {
+        lastBitmap?.copy(Bitmap.Config.ARGB_8888, false)
+    }
+
+    if (bitmap == null) {
+        status?.text = "Chưa nhận được ảnh màn hình"
+        return
+    }
+
+    status?.text = "Đang phân tích lịch sử..."
+
+    try {
+        if (recognizer == null) {
+            recognizer = TextRecognition.getClient(
+                TextRecognizerOptions.DEFAULT_OPTIONS
+            )
         }
+
+        recognizer!!.process(InputImage.fromBitmap(bitmap, 0))
+            .addOnSuccessListener { result ->
+
+                val width = bitmap.width
+                val height = bitmap.height
+
+                val scores = result.textBlocks
+                    .flatMap { it.lines }
+                    .filter { line ->
+                        val box = line.boundingBox
+                        box != null &&
+                        box.left > width * 0.28 &&
+                        box.right < width * 0.75 &&
+                        box.top > height * 0.20 &&
+                        box.bottom < height * 0.58
+                    }
+                    .mapNotNull { line ->
+                        Regex("\\b(1[0-7]|[4-9])\\b")
+                            .find(line.text)?.value?.toIntOrNull()
+                    }
+                    .take(30)
+
+                status?.text = if (scores.isEmpty()) {
+                    "Chưa đọc được tổng điểm. Hãy mở biểu đồ lịch sử."
+                } else {
+                    val outcomes = scores.map {
+                        if (it >= 11) "T" else "X"
+                    }
+
+                    "TỔNG ĐIỂM: ${scores.joinToString("-")}\n" +
+                    "CẦU: ${outcomes.joinToString("-")}\n" +
+                    "Đã đọc ${scores.size} số"
+                }
+            }
+            .addOnFailureListener { error ->
+                status?.text = "Lỗi OCR: ${error.message}"
+            }
+            .addOnCompleteListener {
+                bitmap.recycle()
+            }
+
+    } catch (e: Exception) {
+        bitmap.recycle()
+        status?.text = "Lỗi: ${e.message}"
+    }
+}
+
 
         if (bitmap == null) {
             status?.text = "Chưa nhận được ảnh màn hình"
