@@ -16,7 +16,9 @@ jobs:
           distribution: 'temurin'
       - uses: gradle/actions/setup-gradle@v4
       - name: Generate Project
-        run: python3 setup.py
+        run: |
+          python3 setup.py
+          sed -i 's/ity)/ty)/g' app/src/main/java/com/txai/overlay/FloatingBotService.kt
       - name: Build Debug APK
         run: |
           echo "android.useAndroidX=true" >> gradle.properties
