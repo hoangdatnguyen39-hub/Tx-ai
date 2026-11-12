@@ -35,6 +35,7 @@ with open("app/src/main/AndroidManifest.xml", "w") as f:
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application android:allowBackup="true" android:label="Tx-ai" android:theme="@android:style/Theme.Material.Light.DarkActionBar">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
@@ -48,10 +49,10 @@ with open("app/src/main/AndroidManifest.xml", "w") as f:
 
 with open("app/src/main/res/layout/layout_floating_bot.xml", "w") as f:
     f.write(f"""<?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="{ns}" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="#DD000000" android:orientation="vertical" android:padding="12dp">
-    <TextView android:id="@+id/tvStatus" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Tx-AI: Dang quet..." android:textColor="#00FF00" android:textSize="14sp" android:textStyle="bold" />
-    <TextView android:id="@+id/tvHistory" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="Cau: Chua co" android:textColor="#FFFFFF" android:textSize="12sp" />
-    <Button android:id="@+id/btnClose" android:layout_width="wrap_content" android:layout_height="34dp" android:layout_marginTop="6dp" android:text="Tat Bot" android:textSize="11sp" />
+<LinearLayout xmlns:android="{ns}" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="#E6111111" android:orientation="vertical" android:padding="14dp">
+    <TextView android:id="@+id/tvStatus" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Tx-AI: Dang quet..." android:textColor="#00FF00" android:textSize="16sp" android:textStyle="bold" />
+    <TextView android:id="@+id/tvHistory" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="Cau: Cho van moi" android:textColor="#FFFFFF" android:textSize="13sp" />
+    <Button android:id="@+id/btnClose" android:layout_width="wrap_content" android:layout_height="36dp" android:layout_marginTop="8dp" android:text="Tat Bot" android:textSize="12sp" />
 </LinearLayout>""")
 
 with open("app/src/main/java/com/txai/overlay/MainActivity.kt", "w") as f:
@@ -61,29 +62,43 @@ import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
-import android.os.Build
-import android.os.Bundle
+import android.os.*
 import android.provider.Settings
-import android.widget.Button
-import android.widget.Toast
+import android.widget.*
 
 class MainActivity : Activity() {
     private lateinit var mpm: MediaProjectionManager
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= 33) {
+            requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 101)
+        }
         mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        setContentView(Button(this).apply {
-            text = "Bat Bot Auto Soi Cau"
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(50, 100, 50, 50)
+        }
+        val btnPerm = Button(this).apply {
+            text = "1. Cap quyen Hien thi noi"
+            setOnClickListener {
+                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+            }
+        }
+        val btnStart = Button(this).apply {
+            text = "2. Bat Bot Auto Soi Cau"
             setOnClickListener {
                 if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this@MainActivity)) {
-                    Toast.makeText(this@MainActivity, "Cap quyen hien thi noi truoc", Toast.LENGTH_SHORT).show()
-                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                    Toast.makeText(this@MainActivity, "Ban chua bat nut so 1!", Toast.LENGTH_SHORT).show()
                 } else {
                     startActivityForResult(mpm.createScreenCaptureIntent(), 100)
                 }
             }
-        })
+        }
+        layout.addView(btnPerm)
+        layout.addView(btnStart)
+        setContentView(layout)
     }
+
     override fun onActivityResult(req: Int, res: Int, data: Intent?) {
         super.onActivityResult(req, res, data)
         if (req == 100 && res == RESULT_OK && data != null) {
@@ -92,7 +107,7 @@ class MainActivity : Activity() {
                 putExtra("DATA", data)
             }
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
-            finish()
+            moveTaskToBack(true)
         }
     }
 }""")
@@ -101,6 +116,7 @@ with open("app/src/main/java/com/txai/overlay/FloatingBotService.kt", "w") as f:
     f.write("""package com.txai.overlay
 import android.app.*
 import android.content.*
+import android.content.pm.ServiceInfo
 import android.graphics.*
 import android.hardware.display.*
 import android.media.ImageReader
@@ -131,18 +147,26 @@ class FloatingBotService : Service(), TextToSpeech.OnInitListener {
 
     override fun onCreate() {
         super.onCreate()
-        val cid = "tx_ai_auto"
-        if (Build.VERSION.SDK_INT >= 26) {
-            getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(cid, "Tx-AI Auto", NotificationManager.IMPORTANCE_LOW))
-            startForeground(1, Notification.Builder(this, cid).setContentTitle("Tx-AI Auto dang quet").setSmallIcon(android.R.drawable.ic_dialog_info).build())
-        } else {
-            startForeground(1, Notification.Builder(this).setContentTitle("Tx-AI Auto dang quet").setSmallIcon(android.R.drawable.ic_dialog_info).build())
-        }
         tts = TextToSpeech(this, this)
         setupOverlay()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val cid = "tx_ai_auto"
+        if (Build.VERSION.SDK_INT >= 26) {
+            getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(cid, "Tx-AI Auto", NotificationManager.IMPORTANCE_LOW))
+        }
+        val notif = if (Build.VERSION.SDK_INT >= 26) {
+            Notification.Builder(this, cid).setContentTitle("Tx-AI Auto dang quet").setSmallIcon(android.R.drawable.ic_dialog_info).build()
+        } else {
+            Notification.Builder(this).setContentTitle("Tx-AI Auto dang quet").setSmallIcon(android.R.drawable.ic_dialog_info).build()
+        }
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(1, notif)
+        }
+
         val code = intent?.getIntExtra("CODE", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("DATA")
         if (code == Activity.RESULT_OK && data != null) {
@@ -155,16 +179,16 @@ class FloatingBotService : Service(), TextToSpeech.OnInitListener {
 
     private fun setupOverlay() {
         view = LayoutInflater.from(this).inflate(R.layout.layout_floating_bot, null)
-        val flag = if (Build.VERSION.SDK_INT >= 26) 2038 else 2002
-        val p = WindowManager.LayoutParams(-2, -2, flag, 8, PixelFormat.TRANSLUCENT).apply {
-            gravity = Gravity.TOP or Gravity.START; x = 50; y = 150
+        val flag = if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
+        val p = WindowManager.LayoutParams(-2, -2, flag, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply {
+            gravity = Gravity.CENTER
         }
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         wm.addView(view, p)
         var ix = 0; var iy = 0; var tx = 0f; var ty = 0f
         view.setOnTouchListener { _, e ->
-            if (e.action == 0) { ix = p.x; iy = p.y; tx = e.rawX; ity = e.rawY; true }
-            else if (e.action == 2) { p.x = ix + (e.rawX - tx).toInt(); p.y = iy + (e.rawY - ty).toInt(); wm.updateViewLayout(view, p); true }
+            if (e.action == MotionEvent.ACTION_DOWN) { ix = p.x; iy = p.y; tx = e.rawX; ty = e.rawY; true }
+            else if (e.action == MotionEvent.ACTION_MOVE) { p.x = ix + (e.rawX - tx).toInt(); p.y = iy + (e.rawY - ty).toInt(); wm.updateViewLayout(view, p); true }
             else false
         }
         view.findViewById<Button>(R.id.btnClose).setOnClickListener { stopSelf() }
@@ -197,27 +221,26 @@ class FloatingBotService : Service(), TextToSpeech.OnInitListener {
     private fun analyzeScreen(bmp: Bitmap) {
         val image = InputImage.fromBitmap(bmp, 0)
         recognizer.process(image).addOnSuccessListener { visionText ->
-            val raw = visionText.text.uppercase()
-            val detected = when {
-                raw.contains("TAI") || raw.contains("TÀI") -> "T"
-                raw.contains("XIU") || raw.contains("XỈU") -> "X"
-                else -> ""
-            }
-            if (detected.isNotEmpty() && detected != lastDetected) {
-                lastDetected = detected
-                history.add(detected)
-                if (history.size > 10) history.removeAt(0)
-                val nextCall = predictNext()
-                val textCall = if (nextCall == "T") "Tai" else "Xiu"
-                view.findViewById<TextView>(R.id.tvStatus).text = "Chot: $textCall"
-                view.findViewById<TextView>(R.id.tvHistory).text = "Cau: ${history.joinToString("-")}"
-                if (ready) tts.speak("Van sau danh $textCall", TextToSpeech.QUEUE_FLUSH, null, null)
-            }
-        }
-    }
-
-    private fun predictNext(): String {
-  if (history.size < 2) return history.lastOrNull() ?: "T"
+val raw = visionText.text.uppercase()
+val detected = when {
+raw.contains("TAI") || raw.contains("TÀI") -> "T"
+raw.contains("XIU") || raw.contains("XỈU") -> "X"
+else -> ""
+}
+if (detected.isNotEmpty() && detected != lastDetected) {
+lastDetected = detected
+history.add(detected)
+if (history.size > 10) history.removeAt(0)
+val nextCall = predictNext()
+val textCall = if (nextCall == "T") "Tai" else "Xiu"
+view.findViewById(R.id.tvStatus).text = "Chot: $textCall"
+view.findViewById(R.id.tvHistory).text = "Cau: ${history.joinToString("-")}"
+if (ready) tts.speak("Van sau danh $textCall", TextToSpeech.QUEUE_FLUSH, null, null)
+}
+}
+}
+private fun predictNext(): String {
+if (history.size < 2) return history.lastOrNull() ?: "T"
 val last = history.last()
 val prev = history[history.size - 2]
 return if (last == prev) last else if (last == "T") "X" else "T"
