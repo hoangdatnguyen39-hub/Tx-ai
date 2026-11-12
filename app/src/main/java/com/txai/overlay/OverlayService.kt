@@ -20,6 +20,8 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.provider.Settings
 import android.view.Gravity
@@ -30,6 +32,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 
 class OverlayService : Service() {
@@ -43,16 +46,18 @@ class OverlayService : Service() {
     private lateinit var wm: WindowManager
     private var panel: LinearLayout? = null
     private var status: TextView? = null
+
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
+
     private var lastBitmap: Bitmap? = null
     private val bitmapLock = Any()
-    private val recognizer by lazy {
-        TextRecognition.getClient(
-            TextRecognizerOptions.DEFAULT_OPTIONS
-        )
-    }
+
+    private var captureThread: HandlerThread? = null
+    private var captureHandler: Handler? = null
+
+    private var recognizer: TextRecognizer? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -81,9 +86,9 @@ class OverlayService : Service() {
             return START_NOT_STICKY
         }
 
-        createNotification()
-
         try {
+            createNotification()
+
             val manager = getSystemService(
                 Context.MEDIA_PROJECTION_SERVICE
             ) as MediaProjectionManager
@@ -98,6 +103,11 @@ class OverlayService : Service() {
             val height = metrics.heightPixels
             val density = metrics.densityDpi
 
+            captureThread = HandlerThread("TX-AI-Capture").apply {
+                start()
+            }
+            captureHandler = Handler(captureThread!!.looper)
+
             imageReader = ImageReader.newInstance(
                 width,
                 height,
@@ -111,16 +121,19 @@ class OverlayService : Service() {
                         ?: return@setOnImageAvailableListener
 
                     try {
+                        val bitmap = imageToBitmap(image)
+
                         synchronized(bitmapLock) {
-    lastBitmap?.recycle()
-    lastBitmap = bitmap
+                            lastBitmap?.recycle()
+                            lastBitmap = bitmap
                         }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        e.printStackTrace()
                     } finally {
                         image.close()
                     }
                 },
-                null
+                captureHandler
             )
 
             projection?.registerCallback(
@@ -129,7 +142,7 @@ class OverlayService : Service() {
                         stopSelf()
                     }
                 },
-                null
+                Handler(mainLooper)
             )
 
             virtualDisplay = projection?.createVirtualDisplay(
@@ -140,7 +153,7 @@ class OverlayService : Service() {
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 imageReader?.surface,
                 null,
-                null
+                captureHandler
             )
 
             showOverlay()
@@ -169,7 +182,14 @@ class OverlayService : Service() {
                 .createNotificationChannel(channel)
         }
 
-        val notification = Notification.Builder(this, CHANNEL_ID)
+        val builder =
+            if (Build.VERSION.SDK_INT >= 26) {
+                Notification.Builder(this, CHANNEL_ID)
+            } else {
+                Notification.Builder(this)
+            }
+
+        val notification = builder
             .setContentTitle("TX AI đang hoạt động")
             .setContentText("Đang đọc màn hình")
             .setSmallIcon(android.R.drawable.ic_menu_view)
@@ -199,6 +219,7 @@ class OverlayService : Service() {
             Bitmap.Config.ARGB_8888
         )
 
+        buffer.rewind()
         fullBitmap.copyPixelsFromBuffer(buffer)
 
         val result = Bitmap.createBitmap(
@@ -224,6 +245,7 @@ class OverlayService : Service() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(16, 12, 16, 12)
+
             background = GradientDrawable().apply {
                 setColor(Color.rgb(28, 28, 28))
                 cornerRadius = 18f
@@ -280,29 +302,70 @@ class OverlayService : Service() {
     }
 
     private fun analyzeScreen() {
-    val bitmap = synchronized(bitmapLock) {
-        lastBitmap?.copy(Bitmap.Config.ARGB_8888, false)
+        val bitmap = synchronized(bitmapLock) {
+            lastBitmap?.copy(Bitmap.Config.ARGB_8888, false)
+        }
+
+        if (bitmap == null) {
+            status?.text = "Chưa nhận được ảnh màn hình"
+            return
+        }
+
+        status?.text = "Đang đọc chữ..."
+
+        try {
+            if (recognizer == null) {
+                recognizer = TextRecognition.getClient(
+                    TextRecognizerOptions.DEFAULT_OPTIONS
+                )
+            }
+
+            recognizer!!
+                .process(InputImage.fromBitmap(bitmap, 0))
+                .addOnSuccessListener { result ->
+                    status?.text = if (result.text.isBlank()) {
+                        "Không tìm thấy chữ"
+                    } else {
+                        result.text.take(500)
+                    }
+                }
+                .addOnFailureListener { error ->
+                    status?.text = "Lỗi OCR: ${error.message}"
+                }
+                .addOnCompleteListener {
+                    bitmap.recycle()
+                }
+
+        } catch (e: Exception) {
+            bitmap.recycle()
+            status?.text = "Lỗi OCR: ${e.message}"
+        }
     }
 
-    if (bitmap == null) {
-        status?.text = "Chưa nhận được ảnh màn hình"
-        return
-    }
+    override fun onDestroy() {
+        virtualDisplay?.release()
+        imageReader?.close()
 
-    status?.text = "Đang đọc màn hình..."
+        projection?.stop()
 
-    recognizer.process(InputImage.fromBitmap(bitmap, 0))
-        .addOnSuccessListener { result ->
-            status?.text = if (result.text.isBlank()) {
-                "Không tìm thấy chữ"
-            } else {
-                result.text.take(500)
+        synchronized(bitmapLock) {
+            lastBitmap?.recycle()
+            lastBitmap = null
+        }
+
+        captureThread?.quitSafely()
+        captureThread = null
+        captureHandler = null
+
+        panel?.let {
+            if (it.isAttachedToWindow) {
+                wm.removeView(it)
             }
         }
-        .addOnFailureListener { error ->
-            status?.text = "Lỗi OCR: ${error.message}"
-        }
-        .addOnCompleteListener {
-            bitmap.recycle()
-        }
+
+        recognizer?.close()
+        recognizer = null
+
+        super.onDestroy()
     }
+}
