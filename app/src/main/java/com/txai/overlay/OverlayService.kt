@@ -128,3 +128,24 @@ class OverlayService : Service() {
         super.onDestroy()
     }
 }
+                } else {
+                    "Đã đọc được:\n$text"
+                }
+            }
+            .addOnFailureListener { e ->
+                status?.text = "Lỗi OCR: ${e.message}"
+            }
+    }
+
+    override fun onDestroy() {
+        virtualDisplay?.release()
+        imageReader?.close()
+        projection?.stop()
+        lastBitmap?.recycle()
+        panel?.let {
+            if (it.isAttachedToWindow) wm.removeView(it)
+        }
+        recognizer.close()
+        super.onDestroy()
+    }
+}
