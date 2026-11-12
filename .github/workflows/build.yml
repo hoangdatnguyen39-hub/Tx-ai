@@ -36,7 +36,7 @@ jobs:
               <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-              <application android:allowBackup="true" android:label="Tx-ai" android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+              <application android:allowBackup="true" android:label="Tx-ai" android:theme="@android:style/Theme.Material.Light.DarkActionBar">
                   <activity android:name=".MainActivity" android:exported="true">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
@@ -59,6 +59,7 @@ jobs:
 
           with open("app/src/main/java/com/txai/overlay/MainActivity.kt", "w") as f:
               f.write("""package com.txai.overlay
+          import android.app.Activity
           import android.content.Intent
           import android.net.Uri
           import android.os.Build
@@ -66,9 +67,8 @@ jobs:
           import android.provider.Settings
           import android.widget.Button
           import android.widget.Toast
-          import androidx.appcompat.app.AppCompatActivity
 
-          class MainActivity : AppCompatActivity() {
+          class MainActivity : Activity() {
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
                   val btnStart = Button(this).apply {
@@ -98,7 +98,6 @@ jobs:
           import android.speech.tts.TextToSpeech
           import android.view.*
           import android.widget.*
-          import androidx.core.app.NotificationCompat
           import java.util.Locale
 
           class FloatingBotService : Service(), TextToSpeech.OnInitListener {
@@ -114,8 +113,10 @@ jobs:
                   val cid = "tx_ai_bot"
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                       getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(cid, "Tx-AI", NotificationManager.IMPORTANCE_LOW))
+                      startForeground(1, Notification.Builder(this, cid).setContentTitle("Tx-AI dang chay").setSmallIcon(android.R.drawable.ic_dialog_info).build())
+                  } else {
+                      startForeground(1, Notification.Builder(this).setContentTitle("Tx-AI dang chay").setSmallIcon(android.R.drawable.ic_dialog_info).build())
                   }
-                  startForeground(1, NotificationCompat.Builder(this, cid).setContentTitle("Tx-AI dang chay").setSmallIcon(android.R.drawable.ic_dialog_info).build())
                   tts = TextToSpeech(this, this)
                   view = LayoutInflater.from(this).inflate(R.layout.layout_floating_bot, null)
                   val flag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
