@@ -47,7 +47,7 @@ class OverlayService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private var lastBitmap: Bitmap? = null
-
+    private val bitmapLock = Any()
     private val recognizer by lazy {
         TextRecognition.getClient(
             TextRecognizerOptions.DEFAULT_OPTIONS
