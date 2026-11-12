@@ -280,43 +280,29 @@ class OverlayService : Service() {
     }
 
     private fun analyzeScreen() {
-        val bitmap = lastBitmap
-
-        if (bitmap == null) {
-            status?.text = "Chưa nhận được ảnh màn hình"
-            return
-        }
-
-        status?.text = "Đang đọc chữ..."
-
-        recognizer.process(
-            InputImage.fromBitmap(bitmap, 0)
-        )
-            .addOnSuccessListener { result ->
-                status?.text = if (result.text.isBlank()) {
-                    "Không tìm thấy chữ"
-                } else {
-                    result.text.take(500)
-                }
-            }
-            .addOnFailureListener { error ->
-                status?.text = "Lỗi OCR: ${error.message}"
-            }
+    val bitmap = synchronized(bitmapLock) {
+        lastBitmap?.copy(Bitmap.Config.ARGB_8888, false)
     }
 
-    override fun onDestroy() {
-        virtualDisplay?.release()
-        imageReader?.close()
-        projection?.stop()
-        lastBitmap?.recycle()
+    if (bitmap == null) {
+        status?.text = "Chưa nhận được ảnh màn hình"
+        return
+    }
 
-        panel?.let {
-            if (it.isAttachedToWindow) {
-                wm.removeView(it)
+    status?.text = "Đang đọc màn hình..."
+
+    recognizer.process(InputImage.fromBitmap(bitmap, 0))
+        .addOnSuccessListener { result ->
+            status?.text = if (result.text.isBlank()) {
+                "Không tìm thấy chữ"
+            } else {
+                result.text.take(500)
             }
         }
-
-        recognizer.close()
-        super.onDestroy()
+        .addOnFailureListener { error ->
+            status?.text = "Lỗi OCR: ${error.message}"
+        }
+        .addOnCompleteListener {
+            bitmap.recycle()
+        }
     }
-}
