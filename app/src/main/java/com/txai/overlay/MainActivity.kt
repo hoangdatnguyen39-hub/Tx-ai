@@ -1,81 +1,42 @@
-package com.txai.overlay
+package com.example.txai
 
-import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
 
-class MainActivity : Activity() {
+class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(32, 50, 32, 32)
+        
+        val btnStart = Button(this).apply {
+            text = "Bật Bot Tx-AI"
+            setOnClickListener { checkOverlayPermission() }
         }
-
-        val title = TextView(this).apply {
-            text = "TX AI OVERLAY"
-            textSize = 25f
-        }
-
-        val info = TextView(this).apply {
-            text = "Công cụ phân tích Tài Xỉu"
-            textSize = 16f
-        }
-
-        val captureButton = Button(this).apply {
-            text = "1. CẤP QUYỀN CHỤP MÀN HÌNH"
-            setOnClickListener {
-                ScreenCapture.requestPermission(this@MainActivity)
-            }
-        }
-
-        val button = Button(this).apply {
-            text = "2. BẬT NÚT NỔI"
-            setOnClickListener {
-                if (!Settings.canDrawOverlays(this@MainActivity)) {
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                    startActivity(intent)
-                } else {
-                    val serviceIntent = Intent(this@MainActivity, OverlayService::class.java)
-                    if (ScreenCapture.hasPermission()) {
-                        serviceIntent.putExtra("resultCode", ScreenCapture.resultCode)
-                        serviceIntent.putExtra("data", ScreenCapture.resultData)
-                    }
-                    startService(serviceIntent)
-                    Toast.makeText(this@MainActivity, "Đã bật nút nổi!", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-
-        layout.addView(title)
-        layout.addView(info)
-        layout.addView(captureButton)
-        layout.addView(button)
-
-        setContentView(layout)
+        setContentView(btnStart)
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == ScreenCapture.REQUEST_CODE) {
-            if (resultCode == RESULT_OK && data != null) {
-                ScreenCapture.resultCode = resultCode
-                ScreenCapture.resultData = data
-                Toast.makeText(this, "Đã cấp quyền chụp màn hình thành công!", Toast.LENGTH_SHORT).show()
+    private fun checkOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "Vui lòng cấp quyền hiển thị trên ứng dụng khác", Toast.LENGTH_LONG).show()
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivity(intent)
+        } else {
+            val serviceIntent = Intent(this, FloatingBotService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
             } else {
-                Toast.makeText(this, "Bạn đã từ chối quyền chụp màn hình!", Toast.LENGTH_SHORT).show()
+                startService(serviceIntent)
             }
+            finish() // Thu nhỏ app chính để bạn mở game
         }
     }
 }
