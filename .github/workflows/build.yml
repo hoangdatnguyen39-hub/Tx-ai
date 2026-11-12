@@ -20,8 +20,8 @@ jobs:
           python3 setup.py
           sed -i 's/ity =/ty =/g' app/src/main/java/com/txai/overlay/FloatingBotService.kt
           sed -i 's/gravty/gravity/g' app/src/main/java/com/txai/overlay/FloatingBotService.kt
-          sed -i 's/findViewById(R.id.tvStatus)/(findViewById(R.id.tvStatus) as TextView)/g' app/src/main/java/com/txai/overlay/FloatingBotService.kt
-          sed -i 's/findViewById(R.id.tvHistory)/(findViewById(R.id.tvHistory) as TextView)/g' app/src/main/java/com/txai/overlay/FloatingBotService.kt
+          sed -i 's/findViewById(R.id.tvStatus)/findViewById\x3cTextView\x3e(R.id.tvStatus)/g' app/src/main/java/com/txai/overlay/FloatingBotService.kt
+          sed -i 's/findViewById(R.id.tvHistory)/findViewById\x3cTextView\x3e(R.id.tvHistory)/g' app/src/main/java/com/txai/overlay/FloatingBotService.kt
       - name: Build Debug APK
         run: |
           echo "android.useAndroidX=true" >> gradle.properties
