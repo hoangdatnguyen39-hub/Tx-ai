@@ -1,4 +1,4 @@
-package com.example.txai
+package com.txai.overlay
 
 import android.content.Intent
 import android.net.Uri
