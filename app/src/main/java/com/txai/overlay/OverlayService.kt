@@ -111,9 +111,10 @@ class OverlayService : Service() {
                         ?: return@setOnImageAvailableListener
 
                     try {
-                        val bitmap = imageToBitmap(image)
-                        lastBitmap?.recycle()
-                        lastBitmap = bitmap
+                        synchronized(bitmapLock) {
+    lastBitmap?.recycle()
+    lastBitmap = bitmap
+                        }
                     } catch (_: Exception) {
                     } finally {
                         image.close()
