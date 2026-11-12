@@ -8,6 +8,7 @@ import android.provider.Settings
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 
 class MainActivity : Activity() {
 
@@ -29,8 +30,15 @@ class MainActivity : Activity() {
             textSize = 16f
         }
 
+        val captureButton = Button(this).apply {
+            text = "1. CẤP QUYỀN CHỤP MÀN HÌNH"
+            setOnClickListener {
+                ScreenCapture.requestPermission(this@MainActivity)
+            }
+        }
+
         val button = Button(this).apply {
-            text = "BẬT NÚT NỔI"
+            text = "2. BẬT NÚT NỔI"
             setOnClickListener {
                 if (!Settings.canDrawOverlays(this@MainActivity)) {
                     val intent = Intent(
@@ -39,25 +47,35 @@ class MainActivity : Activity() {
                     )
                     startActivity(intent)
                 } else {
-                    startService(
-                        Intent(this@MainActivity, OverlayService::class.java)
-                    )
+                    val serviceIntent = Intent(this@MainActivity, OverlayService::class.java)
+                    if (ScreenCapture.hasPermission()) {
+                        serviceIntent.putExtra("resultCode", ScreenCapture.resultCode)
+                        serviceIntent.putExtra("data", ScreenCapture.resultData)
+                    }
+                    startService(serviceIntent)
+                    Toast.makeText(this@MainActivity, "Đã bật nút nổi!", Toast.LENGTH_SHORT).show()
                 }
-            }
-        }
-
-        val captureButton = Button(this).apply {
-            text = "CẤP QUYỀN CHỤP MÀN HÌNH"
-            setOnClickListener {
-                ScreenCapture.requestPermission(this@MainActivity)
             }
         }
 
         layout.addView(title)
         layout.addView(info)
-        layout.addView(button)
         layout.addView(captureButton)
+        layout.addView(button)
 
         setContentView(layout)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == ScreenCapture.REQUEST_CODE) {
+            if (resultCode == RESULT_OK && data != null) {
+                ScreenCapture.resultCode = resultCode
+                ScreenCapture.resultData = data
+                Toast.makeText(this, "Đã cấp quyền chụp màn hình thành công!", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Bạn đã từ chối quyền chụp màn hình!", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 }
