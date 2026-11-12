@@ -19,6 +19,7 @@ jobs:
         run: |
           python3 setup.py
           sed -i 's/ity =/ty =/g' app/src/main/java/com/txai/overlay/FloatingBotService.kt
+          sed -i 's/gravty/gravity/g' app/src/main/java/com/txai/overlay/FloatingBotService.kt
       - name: Build Debug APK
         run: |
           echo "android.useAndroidX=true" >> gradle.properties
