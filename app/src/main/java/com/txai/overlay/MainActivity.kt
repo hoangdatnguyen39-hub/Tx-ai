@@ -4,9 +4,10 @@ package com.txai.overlay
 import android.app.Activity
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.net.Uri
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -25,50 +26,40 @@ class MainActivity : Activity() {
         }
 
         val title = TextView(this).apply {
-            text = "TX AI - SCREEN READER"
+            text = "TX AI SCREEN READER"
             textSize = 22f
         }
 
-        val captureButton = Button(this).apply {
-            text = "CẤP QUYỀN ĐỌC MÀN HÌNH"
-            setOnClickListener {
-                val manager = getSystemService(
-                    MEDIA_PROJECTION_SERVICE
-                ) as MediaProjectionManager
+        val startButton = Button(this).apply {
+            text = "CẤP QUYỀN VÀ BẬT BOT"
 
-                startActivityForResult(
-                    manager.createScreenCaptureIntent(),
-                    captureRequest
-                )
-            }
-        }
-
-        val overlayButton = Button(this).apply {
-            text = "BẬT BOT NỔI"
             setOnClickListener {
                 if (!Settings.canDrawOverlays(this@MainActivity)) {
-                    startActivity(
-                        Intent(
-                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                            Uri.parse("package:$packageName")
-                        )
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
                     )
-                } else {
-                    startService(
-                        Intent(this@MainActivity, OverlayService::class.java)
-                    )
+                    startActivity(intent)
                     Toast.makeText(
                         this@MainActivity,
-                        "Đã bật bot nổi",
-                        Toast.LENGTH_SHORT
+                        "Cấp quyền cửa sổ nổi rồi bấm lại",
+                        Toast.LENGTH_LONG
                     ).show()
+                } else {
+                    val manager = getSystemService(
+                        MEDIA_PROJECTION_SERVICE
+                    ) as MediaProjectionManager
+
+                    startActivityForResult(
+                        manager.createScreenCaptureIntent(),
+                        captureRequest
+                    )
                 }
             }
         }
 
         layout.addView(title)
-        layout.addView(captureButton)
-        layout.addView(overlayButton)
+        layout.addView(startButton)
         setContentView(layout)
     }
 
@@ -82,15 +73,29 @@ class MainActivity : Activity() {
 
         if (requestCode == captureRequest) {
             if (resultCode == RESULT_OK && data != null) {
+                val serviceIntent = Intent(
+                    this,
+                    OverlayService::class.java
+                ).apply {
+                    putExtra(OverlayService.EXTRA_RESULT_CODE, resultCode)
+                    putExtra(OverlayService.EXTRA_RESULT_DATA, data)
+                }
+
+                if (Build.VERSION.SDK_INT >= 26) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
+                }
+
                 Toast.makeText(
                     this,
-                    "Đã cấp quyền chụp màn hình",
-                    Toast.LENGTH_LONG
+                    "Đã gửi quyền chụp màn hình",
+                    Toast.LENGTH_SHORT
                 ).show()
             } else {
                 Toast.makeText(
                     this,
-                    "Bạn chưa cấp quyền",
+                    "Bạn chưa cấp quyền chụp màn hình",
                     Toast.LENGTH_SHORT
                 ).show()
             }
