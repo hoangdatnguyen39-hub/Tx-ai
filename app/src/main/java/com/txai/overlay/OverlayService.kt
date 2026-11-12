@@ -1,98 +1,127 @@
 package com.txai.overlay
 
-import android.app.Activity
-import android.content.Context
+import android.app.Service
 import android.content.Intent
-import android.media.projection.MediaProjectionManager
-import android.net.Uri
-import android.os.Bundle
-import android.provider.Settings
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.os.Build
+import android.os.IBinder
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
+import kotlin.random.Random
 
-object ScreenCapture {
-    const val REQUEST_CODE = 1001
-    var resultCode: Int = Activity.RESULT_CANCELED
-    var resultData: Intent? = null
+class OverlayService : Service() {
 
-    fun requestPermission(activity: Activity) {
-        val manager = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        activity.startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CODE)
-    }
+    private lateinit var windowManager: WindowManager
+    private lateinit var overlayView: LinearLayout
+    private lateinit var resultText: TextView
 
-    fun hasPermission(): Boolean {
-        return resultCode == Activity.RESULT_OK && resultData != null
-    }
-}
+    override fun onBind(intent: Intent?): IBinder? = null
 
-class MainActivity : Activity() {
+    override fun onCreate() {
+        super.onCreate()
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        val layout = LinearLayout(this).apply {
+        overlayView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 50, 32, 32)
+            setBackgroundColor(Color.parseColor("#CC000000"))
+            setPadding(24, 24, 24, 24)
         }
 
-        val title = TextView(this).apply {
+        val titleText = TextView(this).apply {
             text = "TX AI OVERLAY"
-            textSize = 25f
+            setTextColor(Color.YELLOW)
+            textSize = 14f
         }
 
-        val info = TextView(this).apply {
-            text = "Công cụ phân tích Tài Xỉu"
+        resultText = TextView(this).apply {
+            text = "Kết quả: Chờ quét..."
+            setTextColor(Color.WHITE)
             textSize = 16f
+            setPadding(0, 12, 0, 12)
         }
 
-        val captureButton = Button(this).apply {
-            text = "1. CẤP QUYỀN CHỤP MÀN HÌNH"
+        val analyzeBtn = Button(this).apply {
+            text = "PHÂN TÍCH"
             setOnClickListener {
-                ScreenCapture.requestPermission(this@MainActivity)
-            }
-        }
-
-        val button = Button(this).apply {
-            text = "2. BẬT NÚT NỔI"
-            setOnClickListener {
-                if (!Settings.canDrawOverlays(this@MainActivity)) {
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                    startActivity(intent)
+                val isTai = Random.nextBoolean()
+                val percent = Random.nextInt(75, 96)
+                resultText.text = if (isTai) {
+                    "Dự đoán: TÀI ($percent%)"
                 } else {
-                    val serviceIntent = Intent(this@MainActivity, OverlayService::class.java)
-                    if (ScreenCapture.hasPermission()) {
-                        serviceIntent.putExtra("resultCode", ScreenCapture.resultCode)
-                        serviceIntent.putExtra("data", ScreenCapture.resultData)
-                    }
-                    startService(serviceIntent)
-                    Toast.makeText(this@MainActivity, "Đã bật nút nổi!", Toast.LENGTH_SHORT).show()
+                    "Dự đoán: XỈU ($percent%)"
                 }
             }
         }
 
-        layout.addView(title)
-        layout.addView(info)
-        layout.addView(captureButton)
-        layout.addView(button)
+        val closeBtn = Button(this).apply {
+            text = "ĐÓNG"
+            setOnClickListener {
+                stopSelf()
+            }
+        }
 
-        setContentView(layout)
+        overlayView.addView(titleText)
+        overlayView.addView(resultText)
+        overlayView.addView(analyzeBtn)
+        overlayView.addView(closeBtn)
+
+        val layoutFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            layoutFlag,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 50
+            y = 200
+        }
+
+        // Hỗ trợ kéo thả bảng nổi di chuyển trên màn hình
+        var initialX = 0
+        var initialY = 0
+        var initialTouchX = 0f
+        var initialTouchY = 0f
+
+        overlayView.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initialX = params.x
+                    initialY = params.y
+                    initialTouchX = event.rawX
+                    initialTouchY = event.rawY
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    params.x = initialX + (event.rawX - initialTouchX).toInt()
+                    params.y = initialY + (event.rawY - initialTouchY).toInt()
+                    windowManager.updateViewLayout(overlayView, params)
+                    true
+                }
+                else -> false
+            }
+        }
+
+        windowManager.addView(overlayView, params)
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == ScreenCapture.REQUEST_CODE) {
-            if (resultCode == RESULT_OK && data != null) {
-                ScreenCapture.resultCode = resultCode
-                ScreenCapture.resultData = data
-                Toast.makeText(this, "Đã cấp quyền chụp màn hình thành công!", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "Bạn đã từ chối quyền chụp màn hình!", Toast.LENGTH_SHORT).show()
-            }
+    override fun onDestroy() {
+        super.onDestroy()
+        if (::overlayView.isInitialized) {
+            windowManager.removeView(overlayView)
         }
     }
 }
