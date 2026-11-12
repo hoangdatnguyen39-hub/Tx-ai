@@ -18,7 +18,9 @@ jobs:
       - name: Generate Project
         run: python3 setup.py
       - name: Build Debug APK
-        run: gradle assembleDebug
+        run: |
+          echo "android.useAndroidX=true" >> gradle.properties
+          gradle assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
