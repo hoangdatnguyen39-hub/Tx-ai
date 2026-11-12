@@ -25,7 +25,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "Công cụ nhận diện và phân tích lịch sử Tài Xỉu"
+            text = "Công cụ phân tích Tài Xỉu"
             textSize = 16f
         }
 
@@ -46,9 +46,18 @@ class MainActivity : Activity() {
             }
         }
 
+        val captureButton = Button(this).apply {
+            text = "CẤP QUYỀN CHỤP MÀN HÌNH"
+            setOnClickListener {
+                ScreenCapture.requestPermission(this@MainActivity)
+            }
+        }
+
         layout.addView(title)
         layout.addView(info)
         layout.addView(button)
+        layout.addView(captureButton)
+
         setContentView(layout)
     }
 }
