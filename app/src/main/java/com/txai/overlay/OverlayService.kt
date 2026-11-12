@@ -44,6 +44,7 @@ class OverlayService : Service() {
     }
 
     private lateinit var wm: WindowManager
+
     private var panel: LinearLayout? = null
     private var status: TextView? = null
 
@@ -66,7 +67,9 @@ class OverlayService : Service() {
         flags: Int,
         startId: Int
     ): Int {
-        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
+
+        val resultCode =
+            intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
 
         val resultData: Intent? =
             if (Build.VERSION.SDK_INT >= 33) {
@@ -91,7 +94,10 @@ class OverlayService : Service() {
                 Context.MEDIA_PROJECTION_SERVICE
             ) as MediaProjectionManager
 
-            projection = manager.getMediaProjection(resultCode, resultData)
+            projection = manager.getMediaProjection(
+                resultCode,
+                resultData
+            )
 
             val metrics = resources.displayMetrics
             val width = metrics.widthPixels
@@ -101,6 +107,7 @@ class OverlayService : Service() {
             captureThread = HandlerThread("TX-AI-Capture").apply {
                 start()
             }
+
             captureHandler = Handler(captureThread!!.looper)
 
             imageReader = ImageReader.newInstance(
@@ -117,6 +124,7 @@ class OverlayService : Service() {
 
                     try {
                         val bitmap = imageToBitmap(image)
+
                         synchronized(bitmapLock) {
                             lastBitmap?.recycle()
                             lastBitmap = bitmap
@@ -158,6 +166,7 @@ class OverlayService : Service() {
                 "Lỗi: ${e.message}",
                 Toast.LENGTH_LONG
             ).show()
+
             stopSelf()
         }
 
@@ -165,25 +174,28 @@ class OverlayService : Service() {
     }
 
     private fun createNotification() {
+
         if (Build.VERSION.SDK_INT >= 26) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "TX AI Screen Capture",
                 NotificationManager.IMPORTANCE_LOW
             )
+
             getSystemService(NotificationManager::class.java)
                 .createNotificationChannel(channel)
         }
 
-        val builder = if (Build.VERSION.SDK_INT >= 26) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            Notification.Builder(this)
-        }
+        val builder =
+            if (Build.VERSION.SDK_INT >= 26) {
+                Notification.Builder(this, CHANNEL_ID)
+            } else {
+                Notification.Builder(this)
+            }
 
         val notification = builder
             .setContentTitle("TX AI đang hoạt động")
-            .setContentText("Đang đọc màn hình")
+            .setContentText("Đang đọc lịch sử Tài Xỉu")
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .build()
 
@@ -199,10 +211,12 @@ class OverlayService : Service() {
     }
 
     private fun imageToBitmap(image: Image): Bitmap {
+
         val plane = image.planes[0]
         val buffer = plane.buffer
         val pixelStride = plane.pixelStride
         val rowStride = plane.rowStride
+
         val rowPadding = rowStride - pixelStride * image.width
 
         val fullBitmap = Bitmap.createBitmap(
@@ -223,10 +237,12 @@ class OverlayService : Service() {
         )
 
         fullBitmap.recycle()
+
         return result
     }
 
     private fun showOverlay() {
+
         if (!Settings.canDrawOverlays(this)) {
             stopSelf()
             return
@@ -237,28 +253,30 @@ class OverlayService : Service() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(16, 12, 16, 12)
+
             background = GradientDrawable().apply {
-                setColor(Color.rgb(28, 28, 28))
+                setColor(Color.rgb(25, 25, 25))
                 cornerRadius = 18f
                 setStroke(2, Color.YELLOW)
             }
         }
 
         val title = TextView(this).apply {
-            text = "TX AI SCREEN READER"
+            text = "TX AI - PHÂN TÍCH CẦU"
             textSize = 15f
             setTextColor(Color.YELLOW)
         }
 
         status = TextView(this).apply {
-            text = "Đang chờ ảnh màn hình..."
+            text = "Đang chờ biểu đồ lịch sử..."
             textSize = 13f
             setTextColor(Color.WHITE)
-            setPadding(0, 10, 0, 10)
+            setPadding(0, 12, 0, 12)
         }
 
         val analyze = Button(this).apply {
-            text = "ĐỌC MÀN HÌNH"
+            text = "ĐỌC LỊCH SỬ VÀ DỰ ĐOÁN"
+
             setOnClickListener {
                 analyzeScreen()
             }
@@ -266,6 +284,7 @@ class OverlayService : Service() {
 
         val close = Button(this).apply {
             text = "TẮT BOT"
+
             setOnClickListener {
                 stopSelf()
             }
@@ -293,6 +312,7 @@ class OverlayService : Service() {
     }
 
     private fun analyzeScreen() {
+
         val bitmap = synchronized(bitmapLock) {
             lastBitmap?.copy(Bitmap.Config.ARGB_8888, false)
         }
@@ -302,50 +322,198 @@ class OverlayService : Service() {
             return
         }
 
-        status?.text = "Đang đọc chữ trên màn hình..."
+        status?.text = "Đang đọc biểu đồ..."
+
+        var crop: Bitmap? = null
+        var enlarged: Bitmap? = null
 
         try {
+            // Cắt vùng biểu đồ tổng điểm phía trên.
+            // Bỏ qua biểu đồ xúc xắc phía dưới.
+
+            val left = (bitmap.width * 0.29f).toInt()
+            val top = (bitmap.height * 0.21f).toInt()
+            val right = (bitmap.width * 0.73f).toInt()
+            val bottom = (bitmap.height * 0.44f).toInt()
+
+            if (
+                right <= left ||
+                bottom <= top ||
+                right > bitmap.width ||
+                bottom > bitmap.height
+            ) {
+                bitmap.recycle()
+                status?.text = "Kích thước màn hình không hợp lệ"
+                return
+            }
+
+            crop = Bitmap.createBitmap(
+                bitmap,
+                left,
+                top,
+                right - left,
+                bottom - top
+            )
+
+            enlarged = Bitmap.createScaledBitmap(
+                crop!!,
+                crop!!.width * 3,
+                crop!!.height * 3,
+                true
+            )
+
+            crop?.recycle()
+            crop = null
+
             if (recognizer == null) {
                 recognizer = TextRecognition.getClient(
                     TextRecognizerOptions.DEFAULT_OPTIONS
                 )
             }
 
-            recognizer?.process(InputImage.fromBitmap(bitmap, 0))
-                ?.addOnSuccessListener { result ->
-                    val scores = Regex("\\b(1[0-7]|[4-9])\\b")
-                        .findAll(result.text)
-                        .mapNotNull { it.value.toIntOrNull() }
-                        .distinct()
-                        .take(30)
-                        .toList()
+            recognizer!!.process(
+                InputImage.fromBitmap(enlarged!!, 0)
+            )
+                .addOnSuccessListener { result ->
 
-                    status?.text = if (scores.isEmpty()) {
-                        "Không đọc được tổng điểm. Hãy mở lịch sử."
-                    } else {
-                        val outcomes = scores.map {
-                            if (it >= 11) "Tài" else "Xỉu"
+                    // Đọc các tổng điểm từ 3 đến 18.
+                    // Sắp xếp theo vị trí từ trái sang phải.
+
+                    val points = result.textBlocks
+                        .flatMap { it.lines }
+                        .mapNotNull { line ->
+
+                            val box = line.boundingBox
+                                ?: return@mapNotNull null
+
+                            val match = Regex(
+                                "(?<!\\d)(1[0-8]|[3-9])(?!\\d)"
+                            ).find(line.text)
+
+                            val number = match
+                                ?.value
+                                ?.toIntOrNull()
+                                ?: return@mapNotNull null
+
+                            Pair(box.centerX(), number)
                         }
+                        .sortedBy { it.first }
+                        .map { it.second }
+                        .take(30)
 
-                        "ĐIỂM: ${scores.joinToString("-")}\n" +
-                        "KẾT QUẢ: ${outcomes.joinToString("-")}\n" +
-                        "Đã đọc ${scores.size} số"
+                    if (points.size < 5) {
+                        status?.text =
+                            "Đọc chưa đủ 5 điểm.\n" +
+                            "Hãy mở rõ biểu đồ tổng điểm phía trên."
+                        return@addOnSuccessListener
                     }
+
+                    val outcomes = points.map { score ->
+                        if (score >= 11) "T" else "X"
+                    }
+
+                    val prediction = predictNext(outcomes)
+
+                    status?.text =
+                        "ĐÃ ĐỌC: ${points.size} ĐIỂM\n\n" +
+                        "TỔNG ĐIỂM:\n" +
+                        points.joinToString(" - ") +
+                        "\n\nLỊCH SỬ:\n" +
+                        outcomes.joinToString(" - ") +
+                        "\n\n" +
+                        prediction
                 }
-                ?.addOnFailureListener { error ->
-                    status?.text = "Lỗi OCR: ${error.message}"
+                .addOnFailureListener { error ->
+                    status?.text =
+                        "Lỗi đọc biểu đồ: ${error.message}"
                 }
-                ?.addOnCompleteListener {
+                .addOnCompleteListener {
+                    enlarged?.recycle()
                     bitmap.recycle()
                 }
 
         } catch (e: Exception) {
+            crop?.recycle()
+            enlarged?.recycle()
             bitmap.recycle()
-            status?.text = "Lỗi: ${e.message}"
+
+            status?.text = "Lỗi phân tích: ${e.message}"
         }
     }
 
+    private fun predictNext(
+        outcomes: List<String>
+    ): String {
+
+        if (outcomes.size < 5) {
+            return "CHƯA ĐỦ DỮ LIỆU"
+        }
+
+        // Tìm mẫu lịch sử giống chuỗi cuối cùng.
+        // Dùng kết quả sau các mẫu cũ để tính tần suất.
+
+        for (length in minOf(5, outcomes.size - 1) downTo 2) {
+
+            val pattern = outcomes.takeLast(length)
+
+            var tai = 0
+            var xiu = 0
+
+            for (i in 0 until outcomes.size - length) {
+
+                val oldPattern = outcomes.subList(
+                    i,
+                    i + length
+                )
+
+                if (oldPattern == pattern) {
+
+                    when (outcomes[i + length]) {
+                        "T" -> tai++
+                        "X" -> xiu++
+                    }
+                }
+            }
+
+            if (tai + xiu >= 2 && tai != xiu) {
+
+                val prediction =
+                    if (tai > xiu) "TÀI" else "XỈU"
+
+                val total = tai + xiu
+                val confidence =
+                    maxOf(tai, xiu) * 100 / total
+
+                return "DỰ ĐOÁN: $prediction\n" +
+                    "Mẫu khớp: $total lần\n" +
+                    "Tài: $tai | Xỉu: $xiu\n" +
+                    "Tỷ lệ trong mẫu: $confidence%"
+            }
+        }
+
+        // Nếu không tìm được mẫu lặp đủ dữ liệu,
+        // tham khảo 8 kết quả gần nhất.
+
+        val recent = outcomes.takeLast(8)
+
+        val tai = recent.count { it == "T" }
+        val xiu = recent.count { it == "X" }
+
+        if (tai == xiu) {
+            return "CHƯA CÓ CẦU RÕ\n" +
+                "Tài: $tai | Xỉu: $xiu"
+        }
+
+        val prediction =
+            if (tai > xiu) "TÀI" else "XỈU"
+
+        return "DỰ ĐOÁN THAM KHẢO: $prediction\n" +
+            "8 phiên gần nhất:\n" +
+            "Tài: $tai | Xỉu: $xiu"
+    }
+
     override fun onDestroy() {
+
         virtualDisplay?.release()
         virtualDisplay = null
 
@@ -369,6 +537,7 @@ class OverlayService : Service() {
                 wm.removeView(it)
             }
         }
+
         panel = null
 
         recognizer?.close()
