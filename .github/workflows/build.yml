@@ -29,4 +29,10 @@ jobs:
         with:
           name: TX-AI-Overlay-APK
           path: '**/build/outputs/apk/debug/*.apk'
+                - name: Generate Project
+        run: |
+          python3 setup.py
+          sed -i 's/ity =/ty =/g' app/src/main/java/com/txai/overlay/FloatingBotService.kt
+          sed -i 's/gravty/gravity/g' app/src/main/java/com/txai/overlay/FloatingBotService.kt
+          sed -i 's/<uses-permission/<uses-permission android:name="android.permission.POST_NOTIFICATIONS" \/>\n    <uses-permission/' app/src/main/AndroidManifest.xml
           
