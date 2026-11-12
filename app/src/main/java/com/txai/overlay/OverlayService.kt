@@ -400,7 +400,7 @@ class OverlayService : Service() {
                                 return@mapNotNull null
                             }
 
-                            Pair(box.centerX(), value)
+                            Pair(box.centerX().toFloat(), value)
                         }
                         .sortedBy { it.first }
 
