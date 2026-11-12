@@ -1,5 +1,4 @@
-<manifest xmlns:android="http://android.com"
-    package="com.example.txai">
+<manifest xmlns:android="http://android.com">
 
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
