@@ -1,8 +1,8 @@
-name: Build TX AI Overlay
+name: Build Android APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -27,16 +27,10 @@ jobs:
           PROJECT_DIR=$(find . -maxdepth 3 \( -name "settings.gradle" -o -name "settings.gradle.kts" \) -exec dirname {} \; | head -n 1)
           if [ -n "$PROJECT_DIR" ]; then
             cd "$PROJECT_DIR"
-          fi       - name: Fix Manifest Namespace
-        run: |
-          sed -i 's|http://android.com|http://android.com|g' app/src/main/AndroidManifest.xml
-          sed -i 's|http://android.com|http://android.com|g' app/src/main/res/layout/layout_floating_bot.xml
-          
-          if [ -f "./gradlew" ]; then       - name: Fix Manifest Namespace
-        run: |
-          sed -i 's|http://android.com|http://android.com|g' app/src/main/AndroidManifest.xml
-          sed -i 's|http://android.com|http://android.com|g' app/src/main/res/layout/layout_floating_bot.xml
-          
+          fi
+          sed -i 's|android.com"|://android.com"|g' app/src/main/AndroidManifest.xml || true
+          sed -i 's|android.com"|://android.com"|g' app/src/main/res/layout/layout_floating_bot.xml || true
+          if [ -f "./gradlew" ]; then
             chmod +x gradlew
             ./gradlew assembleDebug
           else
