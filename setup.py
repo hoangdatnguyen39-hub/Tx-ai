@@ -183,7 +183,7 @@ class FloatingBotService : Service(), TextToSpeech.OnInitListener {
         override fun run() {
             val img = ir?.acquireLatestImage()
             if (img != null) {
-                val plane = img.planes
+                val plane = img.planes.first()
                 val buf = plane.buffer
                 val bmp = Bitmap.createBitmap(plane.rowStride / plane.pixelStride, img.height, Bitmap.Config.ARGB_8888)
                 bmp.copyPixelsFromBuffer(buf)
