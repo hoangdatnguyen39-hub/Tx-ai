@@ -29,7 +29,7 @@ jobs:
         with:
           name: TX-AI-Overlay-APK
           path: '**/build/outputs/apk/debug/*.apk'
-                - name: Generate Project
+      - name: Generate Project
         run: |
           python3 setup.py
           sed -i 's/ity =/ty =/g' app/src/main/java/com/txai/overlay/FloatingBotService.kt
