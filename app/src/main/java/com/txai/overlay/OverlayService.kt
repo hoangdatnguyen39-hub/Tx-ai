@@ -1,74 +1,98 @@
 package com.txai.overlay
 
-import android.app.Service
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
-import android.graphics.Color
-import android.graphics.PixelFormat
-import android.os.IBinder
-import android.view.Gravity
-import android.view.MotionEvent
-import android.view.WindowManager
+import android.media.projection.MediaProjectionManager
+import android.net.Uri
+import android.os.Bundle
+import android.provider.Settings
+import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 
-class OverlayService : Service() {
+object ScreenCapture {
+    const val REQUEST_CODE = 1001
+    var resultCode: Int = Activity.RESULT_CANCELED
+    var resultData: Intent? = null
 
-    private lateinit var windowManager: WindowManager
-    private var floatingView: TextView? = null
+    fun requestPermission(activity: Activity) {
+        val manager = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        activity.startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CODE)
+    }
 
-    override fun onCreate() {
-        super.onCreate()
+    fun hasPermission(): Boolean {
+        return resultCode == Activity.RESULT_OK && resultData != null
+    }
+}
 
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+class MainActivity : Activity() {
 
-        val button = TextView(this).apply {
-            text = "TX"
-            textSize = 18f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.rgb(30, 90, 180))
-            gravity = Gravity.CENTER
-            setPadding(18, 14, 18, 14)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 50, 32, 32)
         }
 
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 30
-            y = 250
+        val title = TextView(this).apply {
+            text = "TX AI OVERLAY"
+            textSize = 25f
         }
 
-        button.setOnTouchListener { view, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> true
-                MotionEvent.ACTION_UP -> {
-                    view.performClick()
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    params.x = event.rawX.toInt()
-                    params.y = event.rawY.toInt()
-                    windowManager.updateViewLayout(view, params)
-                    true
-                }
-                else -> false
+        val info = TextView(this).apply {
+            text = "Công cụ phân tích Tài Xỉu"
+            textSize = 16f
+        }
+
+        val captureButton = Button(this).apply {
+            text = "1. CẤP QUYỀN CHỤP MÀN HÌNH"
+            setOnClickListener {
+                ScreenCapture.requestPermission(this@MainActivity)
             }
         }
 
-        windowManager.addView(button, params)
-        floatingView = button
-    }
-
-    override fun onDestroy() {
-        floatingView?.let {
-            windowManager.removeView(it)
+        val button = Button(this).apply {
+            text = "2. BẬT NÚT NỔI"
+            setOnClickListener {
+                if (!Settings.canDrawOverlays(this@MainActivity)) {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                    startActivity(intent)
+                } else {
+                    val serviceIntent = Intent(this@MainActivity, OverlayService::class.java)
+                    if (ScreenCapture.hasPermission()) {
+                        serviceIntent.putExtra("resultCode", ScreenCapture.resultCode)
+                        serviceIntent.putExtra("data", ScreenCapture.resultData)
+                    }
+                    startService(serviceIntent)
+                    Toast.makeText(this@MainActivity, "Đã bật nút nổi!", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
-        floatingView = null
-        super.onDestroy()
+
+        layout.addView(title)
+        layout.addView(info)
+        layout.addView(captureButton)
+        layout.addView(button)
+
+        setContentView(layout)
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == ScreenCapture.REQUEST_CODE) {
+            if (resultCode == RESULT_OK && data != null) {
+                ScreenCapture.resultCode = resultCode
+                ScreenCapture.resultData = data
+                Toast.makeText(this, "Đã cấp quyền chụp màn hình thành công!", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Bạn đã từ chối quyền chụp màn hình!", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 }
