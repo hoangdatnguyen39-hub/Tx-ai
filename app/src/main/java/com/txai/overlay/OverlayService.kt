@@ -16,9 +16,10 @@ import android.os.*
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.*
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 class OverlayService : Service() {
 
@@ -37,11 +38,15 @@ class OverlayService : Service() {
     private var display: VirtualDisplay? = null
 
     private val handler = Handler(Looper.getMainLooper())
-    private val recognizer =
-        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-
     private var waiting = false
     private var captureTimeout: Runnable? = null
+
+    private data class Dot(
+        val x: Int,
+        val y: Int,
+        val black: Boolean,
+        val size: Int
+    )
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -50,7 +55,6 @@ class OverlayService : Service() {
         flags: Int,
         startId: Int
     ): Int {
-
         createChannel()
 
         val notification = Notification.Builder(this, CHANNEL)
@@ -76,7 +80,7 @@ class OverlayService : Service() {
             Activity.RESULT_CANCELED
         ) ?: Activity.RESULT_CANCELED
 
-        val data = if (Build.VERSION.SDK_INT >= 33) {
+        val data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
             intent?.getParcelableExtra(
                 EXTRA_RESULT_DATA,
                 Intent::class.java
@@ -86,7 +90,10 @@ class OverlayService : Service() {
             intent?.getParcelableExtra(EXTRA_RESULT_DATA)
         }
 
-        if (projection == null && code == Activity.RESULT_OK && data != null) {
+        if (projection == null &&
+            code == Activity.RESULT_OK &&
+            data != null
+        ) {
             startCapture(code, data)
         }
 
@@ -138,15 +145,16 @@ class OverlayService : Service() {
             reader?.setOnImageAvailableListener(
                 { source ->
                     if (!waiting) {
-                        val unused = source.acquireLatestImage()
-                        unused?.close()
+                        source.acquireLatestImage()?.close()
                         return@setOnImageAvailableListener
                     }
 
                     val image = source.acquireLatestImage()
                     if (image != null) {
                         waiting = false
-                        captureTimeout?.let { handler.removeCallbacks(it) }
+                        captureTimeout?.let {
+                            handler.removeCallbacks(it)
+                        }
                         captureTimeout = null
 
                         val bitmap = imageToBitmap(image)
@@ -176,7 +184,7 @@ class OverlayService : Service() {
             )
 
         } catch (e: Exception) {
-            showResult("LỖI: ${e.javaClass.simpleName}")
+            showResult("LỖI CHỤP MÀN HÌNH")
         }
     }
 
@@ -186,8 +194,9 @@ class OverlayService : Service() {
             val buffer = plane.buffer
             val pixelStride = plane.pixelStride
             val rowStride = plane.rowStride
-            val paddedWidth =
-                image.width + (rowStride - pixelStride * image.width) / pixelStride
+
+            val paddedWidth = image.width +
+                (rowStride - pixelStride * image.width) / pixelStride
 
             val full = Bitmap.createBitmap(
                 paddedWidth,
@@ -203,7 +212,7 @@ class OverlayService : Service() {
             )
             full.recycle()
             result
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -273,6 +282,15 @@ class OverlayService : Service() {
             return
         }
 
+        // Bỏ ảnh cũ trong hàng đợi.
+        try {
+            while (true) {
+                val old = reader?.acquireLatestImage() ?: break
+                old.close()
+            }
+        } catch (_: Exception) {
+        }
+
         waiting = true
         resultText?.text = "ĐANG ĐỌC..."
 
@@ -288,7 +306,7 @@ class OverlayService : Service() {
             }
         }
 
-        handler.postDelayed(captureTimeout!!, 4000)
+        handler.postDelayed(captureTimeout!!, 5000)
     }
 
     private fun showOverlayAgain() {
@@ -315,64 +333,223 @@ class OverlayService : Service() {
         }
     }
 
+    private fun luminance(color: Int): Int {
+        return (
+            Color.red(color) * 299 +
+            Color.green(color) * 587 +
+            Color.blue(color) * 114
+        ) / 1000
+    }
+
+    private fun findDots(bitmap: Bitmap): List<Dot> {
+        val scale = min(
+            1.0,
+            1000.0 / bitmap.width.toDouble()
+        )
+
+        val w = max(1, (bitmap.width * scale).toInt())
+        val h = max(1, (bitmap.height * scale).toInt())
+
+        val small = Bitmap.createScaledBitmap(bitmap, w, h, true)
+
+        val pixels = IntArray(w * h)
+        small.getPixels(pixels, 0, w, 0, 0, w, h)
+        small.recycle()
+
+        val visited = BooleanArray(w * h)
+        val dots = mutableListOf<Dot>()
+
+        val minSize = max(5, (w * 0.008).toInt())
+        val maxSize = max(minSize + 2, (w * 0.075).toInt())
+
+        // Chỉ xét vùng trên, bỏ phần biểu tượng xúc xắc phía dưới.
+        val maxY = (h * 0.58).toInt()
+
+        val queue = IntArray(w * maxY.coerceAtLeast(1))
+
+        for (polarity in 0..1) {
+            java.util.Arrays.fill(visited, false)
+
+            for (y in 1 until maxY - 1) {
+                for (x in 1 until w - 1) {
+                    val start = y * w + x
+                    if (visited[start]) continue
+
+                    val lum = luminance(pixels[start])
+                    val matches = if (polarity == 0) {
+                        lum < 75
+                    } else {
+                        lum > 220
+                    }
+
+                    if (!matches) continue
+
+                    var head = 0
+                    var tail = 0
+
+                    queue[tail++] = start
+                    visited[start] = true
+
+                    var minX = x
+                    var maxX = x
+                    var minCompY = y
+                    var maxCompY = y
+                    var count = 0
+
+                    while (head < tail) {
+                        val pos = queue[head++]
+                        val px = pos % w
+                        val py = pos / w
+
+                        count++
+                        minX = min(minX, px)
+                        maxX = max(maxX, px)
+                        minCompY = min(minCompY, py)
+                        maxCompY = max(maxCompY, py)
+
+                        if (count > maxSize * maxSize * 2) break
+
+                        for (dy in -1..1) {
+                            for (dx in -1..1) {
+                                if (dx == 0 && dy == 0) continue
+
+                                val nx = px + dx
+                                val ny = py + dy
+
+                                if (nx <= 0 || nx >= w - 1 ||
+                                    ny <= 0 || ny >= maxY - 1
+                                ) continue
+
+                                val ni = ny * w + nx
+                                if (visited[ni]) continue
+
+                                val nl = luminance(pixels[ni])
+                                val ok = if (polarity == 0) {
+                                    nl < 75
+                                } else {
+                                    nl > 220
+                                }
+
+                                if (ok) {
+                                    visited[ni] = true
+                                    if (tail < queue.size) {
+                                        queue[tail++] = ni
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    val bw = maxX - minX + 1
+                    val bh = maxCompY - minCompY + 1
+
+                    if (bw < minSize || bh < minSize ||
+                        bw > maxSize || bh > maxSize
+                    ) continue
+
+                    val ratio = bw.toFloat() / bh.toFloat()
+                    if (ratio < 0.65f || ratio > 1.35f) continue
+
+                    val fill = count.toFloat() / (bw * bh)
+                    if (fill < 0.40f || fill > 0.95f) continue
+
+                    dots.add(
+                        Dot(
+                            x = (minX + maxX) / 2,
+                            y = (minCompY + maxCompY) / 2,
+                            black = polarity == 0,
+                            size = max(bw, bh)
+                        )
+                    )
+                }
+            }
+        }
+
+        bitmap.recycle()
+        return dots
+    }
+
     private fun readChart(bitmap: Bitmap) {
-        recognizer.process(InputImage.fromBitmap(bitmap, 0))
-            .addOnSuccessListener { result ->
-                val values = mutableListOf<Pair<Int, Int>>()
+        try {
+            val dots = findDots(bitmap)
 
-                for (block in result.textBlocks) {
-                    for (line in block.lines) {
-                        val rect = line.boundingBox ?: continue
+            if (dots.size < 6) {
+                showResult("KHÔNG ĐỌC ĐỦ CẦU")
+                return
+            }
 
-                        if (rect.centerY() > bitmap.height * 0.58f) {
-                            continue
-                        }
+            // Tìm hàng có nhiều ô nhất.
+            val rows = mutableListOf<MutableList<Dot>>()
 
-                        val number = line.text.trim().toIntOrNull()
-                            ?: continue
-
-                        if (number in 3..18) {
-                            values.add(rect.centerX() to number)
-                        }
-                    }
+            for (dot in dots.sortedBy { it.y }) {
+                val row = rows.firstOrNull {
+                    abs(it.map { d -> d.y }.average() - dot.y) <
+                        max(8, dot.size)
                 }
 
-                val history = values
-                    .sortedBy { it.first }
-                    .takeLast(21)
-                    .mapNotNull {
-                        when (it.second) {
-                            in 4..10 -> false
-                            in 11..17 -> true
-                            else -> null
-                        }
-                    }
-                    .takeLast(10)
-
-                bitmap.recycle()
-
-                if (history.size < 6) {
-                    showResult("KHÔNG ĐỌC ĐỦ CẦU")
+                if (row != null) {
+                    row.add(dot)
                 } else {
-                    showResult(analyze(history))
+                    rows.add(mutableListOf(dot))
                 }
             }
-            .addOnFailureListener {
-                bitmap.recycle()
-                showResult("LỖI NHẬN DIỆN")
+
+            val bestRow = rows
+                .filter { it.size >= 6 }
+                .maxByOrNull { it.size }
+
+            if (bestRow == null) {
+                showResult("KHÔNG TÌM THẤY HÀNG CẦU")
+                return
             }
+
+            val history = bestRow
+                .distinctBy { it.x / max(1, it.size / 2) }
+                .sortedBy { it.x }
+                .takeLast(10)
+                .map { it.black }
+
+            if (history.size < 6) {
+                showResult("KHÔNG ĐỌC ĐỦ CẦU")
+                return
+            }
+
+            showResult(analyze(history))
+
+        } catch (_: Exception) {
+            showResult("LỖI PHÂN TÍCH ẢNH")
+        }
     }
 
     private fun analyze(history: List<Boolean>): String {
-        val tai = history.count { it }
-        val xiu = history.size - tai
+        // true = Tài (đen), false = Xỉu (trắng)
+        var taiScore = 0.0
+        var xiuScore = 0.0
 
-        val p = (tai + 1.0) / (history.size + 2.0)
+        // Thống kê kết quả chuyển tiếp trong chuỗi đã đọc.
+        for (i in 1 until history.size - 1) {
+            if (history[i] == history[i - 1]) {
+                if (history[i]) taiScore += 0.5
+                else xiuScore += 0.5
+            }
+        }
+
+        // Ưu tiên xu hướng gần nhất.
+        val recent = history.takeLast(4)
+        val recentTai = recent.count { it }
+        val recentXiu = recent.size - recentTai
+
+        taiScore += recentTai * 0.8
+        xiuScore += recentXiu * 0.8
+
+        val total = taiScore + xiuScore
+        if (total <= 0.0) return "CHƯA ĐỦ DỮ LIỆU"
+
         val confidence = (
-            maxOf(p, 1.0 - p) * 100
+            max(taiScore, xiuScore) / total * 100
         ).toInt().coerceIn(50, 65)
 
-        return if (p >= 0.5) {
+        return if (taiScore >= xiuScore) {
             "TÀI — $confidence%"
         } else {
             "XỈU — $confidence%"
@@ -403,7 +580,6 @@ class OverlayService : Service() {
             display?.release()
             reader?.close()
             projection?.stop()
-            recognizer.close()
 
             panel?.let {
                 if (it.isAttachedToWindow) wm.removeView(it)
