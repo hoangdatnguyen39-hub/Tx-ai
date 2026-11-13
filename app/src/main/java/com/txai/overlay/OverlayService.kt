@@ -15,9 +15,7 @@ import android.media.projection.MediaProjectionManager
 import android.os.*
 import android.view.Gravity
 import android.view.WindowManager
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
+import android.widget.*
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -27,8 +25,7 @@ class OverlayService : Service() {
     companion object {
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
-        private const val CHANNEL_ID = "tx_ai_channel"
-        private const val NOTIFICATION_ID = 1001
+        private const val CHANNEL = "tx_ai"
     }
 
     private lateinit var wm: WindowManager
@@ -37,14 +34,14 @@ class OverlayService : Service() {
 
     private var projection: MediaProjection? = null
     private var reader: ImageReader? = null
-    private var virtualDisplay: VirtualDisplay? = null
+    private var display: VirtualDisplay? = null
 
     private val handler = Handler(Looper.getMainLooper())
     private val recognizer =
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
-    private var capturing = false
-    private var captureAttempts = 0
+    private var waiting = false
+    private var captureTimeout: Runnable? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -54,29 +51,27 @@ class OverlayService : Service() {
         startId: Int
     ): Int {
 
-        createNotificationChannel()
+        createChannel()
 
-        val notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("TX AI đang hoạt động")
-            .setContentText("Sẵn sàng đọc cầu")
-            .setSmallIcon(android.R.drawable.ic_menu_view)
+        val notification = Notification.Builder(this, CHANNEL)
+            .setContentTitle("TX AI")
+            .setContentText("Đang hoạt động")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
             .build()
 
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(
-                NOTIFICATION_ID,
+                1001,
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             )
         } else {
-            startForeground(NOTIFICATION_ID, notification)
+            startForeground(1001, notification)
         }
 
-        if (panel == null) {
-            showOverlay()
-        }
+        if (panel == null) showOverlay()
 
-        val resultCode = intent?.getIntExtra(
+        val code = intent?.getIntExtra(
             EXTRA_RESULT_CODE,
             Activity.RESULT_CANCELED
         ) ?: Activity.RESULT_CANCELED
@@ -91,17 +86,17 @@ class OverlayService : Service() {
             intent?.getParcelableExtra(EXTRA_RESULT_DATA)
         }
 
-        if (projection == null && resultCode == Activity.RESULT_OK && data != null) {
-            startScreenCapture(resultCode, data)
+        if (projection == null && code == Activity.RESULT_OK && data != null) {
+            startCapture(code, data)
         }
 
         return START_NOT_STICKY
     }
 
-    private fun createNotificationChannel() {
+    private fun createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
+                CHANNEL,
                 "TX AI",
                 NotificationManager.IMPORTANCE_LOW
             )
@@ -110,34 +105,70 @@ class OverlayService : Service() {
         }
     }
 
-    private fun startScreenCapture(
-        resultCode: Int,
-        data: Intent
-    ) {
+    private fun startCapture(code: Int, data: Intent) {
         try {
             val manager = getSystemService(
                 MEDIA_PROJECTION_SERVICE
             ) as MediaProjectionManager
 
-            projection = manager.getMediaProjection(resultCode, data)
-
             val metrics = resources.displayMetrics
-            val width = metrics.widthPixels
-            val height = metrics.heightPixels
-            val density = metrics.densityDpi
+
+            projection = manager.getMediaProjection(code, data)
+
+            projection?.registerCallback(
+                object : MediaProjection.Callback() {
+                    override fun onStop() {
+                        display?.release()
+                        display = null
+                        reader?.close()
+                        reader = null
+                        projection = null
+                    }
+                },
+                handler
+            )
 
             reader = ImageReader.newInstance(
-                width,
-                height,
+                metrics.widthPixels,
+                metrics.heightPixels,
                 PixelFormat.RGBA_8888,
                 3
             )
 
-            virtualDisplay = projection?.createVirtualDisplay(
-                "TX_AI_CAPTURE",
-                width,
-                height,
-                density,
+            reader?.setOnImageAvailableListener(
+                { source ->
+                    if (!waiting) {
+                        val unused = source.acquireLatestImage()
+                        unused?.close()
+                        return@setOnImageAvailableListener
+                    }
+
+                    val image = source.acquireLatestImage()
+                    if (image != null) {
+                        waiting = false
+                        captureTimeout?.let { handler.removeCallbacks(it) }
+                        captureTimeout = null
+
+                        val bitmap = imageToBitmap(image)
+                        image.close()
+
+                        showOverlayAgain()
+
+                        if (bitmap != null) {
+                            readChart(bitmap)
+                        } else {
+                            showResult("ẢNH KHÔNG HỢP LỆ")
+                        }
+                    }
+                },
+                handler
+            )
+
+            display = projection?.createVirtualDisplay(
+                "TX_AI_SCREEN",
+                metrics.widthPixels,
+                metrics.heightPixels,
+                metrics.densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader?.surface,
                 null,
@@ -145,7 +176,35 @@ class OverlayService : Service() {
             )
 
         } catch (e: Exception) {
-            resultText?.text = "LỖI CHỤP MÀN HÌNH"
+            showResult("LỖI: ${e.javaClass.simpleName}")
+        }
+    }
+
+    private fun imageToBitmap(image: Image): Bitmap? {
+        return try {
+            val plane = image.planes[0]
+            val buffer = plane.buffer
+            val pixelStride = plane.pixelStride
+            val rowStride = plane.rowStride
+            val paddedWidth =
+                image.width + (rowStride - pixelStride * image.width) / pixelStride
+
+            val full = Bitmap.createBitmap(
+                paddedWidth,
+                image.height,
+                Bitmap.Config.ARGB_8888
+            )
+
+            buffer.rewind()
+            full.copyPixelsFromBuffer(buffer)
+
+            val result = Bitmap.createBitmap(
+                full, 0, 0, image.width, image.height
+            )
+            full.recycle()
+            result
+        } catch (e: Exception) {
+            null
         }
     }
 
@@ -154,8 +213,7 @@ class OverlayService : Service() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(18, 14, 18, 14)
-
+            setPadding(16, 12, 16, 12)
             background = GradientDrawable().apply {
                 setColor(Color.rgb(25, 25, 25))
                 cornerRadius = 18f
@@ -173,27 +231,23 @@ class OverlayService : Service() {
             text = "SẴN SÀNG"
             textSize = 23f
             setTextColor(Color.WHITE)
-            setPadding(0, 16, 0, 16)
+            setPadding(0, 12, 0, 12)
         }
 
-        val predictButton = Button(this).apply {
+        val predict = Button(this).apply {
             text = "DỰ ĐOÁN"
-            setOnClickListener {
-                captureAndPredict()
-            }
+            setOnClickListener { captureAndPredict() }
         }
 
-        val closeButton = Button(this).apply {
+        val close = Button(this).apply {
             text = "TẮT BOT"
-            setOnClickListener {
-                stopSelf()
-            }
+            setOnClickListener { stopSelf() }
         }
 
         root.addView(title)
         root.addView(resultText)
-        root.addView(predictButton)
-        root.addView(closeButton)
+        root.addView(predict)
+        root.addView(close)
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -212,168 +266,82 @@ class OverlayService : Service() {
     }
 
     private fun captureAndPredict() {
-        if (capturing) return
+        if (waiting) return
 
         if (projection == null || reader == null) {
-            resultText?.text = "CHƯA CÓ QUYỀN CHỤP"
+            showResult("CHƯA CÓ QUYỀN CHỤP")
             return
         }
 
-        capturing = true
-        captureAttempts = 0
-        resultText?.text = "ĐANG ĐỌC CẦU..."
+        waiting = true
+        resultText?.text = "ĐANG ĐỌC..."
 
         panel?.let {
-            if (it.isAttachedToWindow) {
-                wm.removeView(it)
+            if (it.isAttachedToWindow) wm.removeView(it)
+        }
+
+        captureTimeout = Runnable {
+            if (waiting) {
+                waiting = false
+                showOverlayAgain()
+                showResult("HẾT THỜI GIAN CHỜ ẢNH")
             }
         }
 
-        handler.postDelayed({
-            captureFrame()
-        }, 500)
-    }
-
-    private fun captureFrame() {
-        try {
-            val image = reader?.acquireLatestImage()
-
-            if (image == null) {
-                captureAttempts++
-
-                if (captureAttempts < 3) {
-                    handler.postDelayed({
-                        captureFrame()
-                    }, 300)
-                } else {
-                    finishCapture("KHÔNG CHỤP ĐƯỢC MÀN HÌNH")
-                }
-                return
-            }
-
-            val bitmap = imageToBitmap(image)
-            image.close()
-
-            showOverlayAgain()
-
-            if (bitmap == null) {
-                finishCapture("ẢNH KHÔNG HỢP LỆ")
-                return
-            }
-
-            readChart(bitmap)
-
-        } catch (e: Exception) {
-            showOverlayAgain()
-            finishCapture("LỖI ĐỌC MÀN HÌNH")
-        }
-    }
-
-    private fun imageToBitmap(image: Image): Bitmap? {
-        return try {
-            val plane = image.planes[0]
-            val buffer = plane.buffer
-            val pixelStride = plane.pixelStride
-            val rowStride = plane.rowStride
-            val rowPadding = rowStride - pixelStride * image.width
-
-            val paddedWidth =
-                image.width + rowPadding / pixelStride
-
-            val fullBitmap = Bitmap.createBitmap(
-                paddedWidth,
-                image.height,
-                Bitmap.Config.ARGB_8888
-            )
-
-            buffer.rewind()
-            fullBitmap.copyPixelsFromBuffer(buffer)
-
-            val cropped = Bitmap.createBitmap(
-                fullBitmap,
-                0,
-                0,
-                image.width,
-                image.height
-            )
-
-            fullBitmap.recycle()
-            cropped
-
-        } catch (e: Exception) {
-            null
-        }
+        handler.postDelayed(captureTimeout!!, 4000)
     }
 
     private fun showOverlayAgain() {
-        if (panel == null) return
+        handler.post {
+            val view = panel ?: return@post
 
-        try {
-            if (panel?.isAttachedToWindow != true) {
-                val params = WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.WRAP_CONTENT,
-                    WindowManager.LayoutParams.WRAP_CONTENT,
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                    PixelFormat.TRANSLUCENT
-                ).apply {
-                    gravity = Gravity.TOP or Gravity.START
-                    x = 30
-                    y = 180
+            try {
+                if (!view.isAttachedToWindow) {
+                    val params = WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.WRAP_CONTENT,
+                        WindowManager.LayoutParams.WRAP_CONTENT,
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                        PixelFormat.TRANSLUCENT
+                    ).apply {
+                        gravity = Gravity.TOP or Gravity.START
+                        x = 30
+                        y = 180
+                    }
+                    wm.addView(view, params)
                 }
-
-                wm.addView(panel, params)
+            } catch (_: Exception) {
             }
-        } catch (_: Exception) {
         }
     }
 
     private fun readChart(bitmap: Bitmap) {
-        val input = InputImage.fromBitmap(bitmap, 0)
-
-        recognizer.process(input)
+        recognizer.process(InputImage.fromBitmap(bitmap, 0))
             .addOnSuccessListener { result ->
-
-                val candidates = mutableListOf<Pair<Int, Int>>()
+                val values = mutableListOf<Pair<Int, Int>>()
 
                 for (block in result.textBlocks) {
                     for (line in block.lines) {
                         val rect = line.boundingBox ?: continue
 
-                        // Chỉ lấy vùng phía trên màn hình.
                         if (rect.centerY() > bitmap.height * 0.58f) {
                             continue
                         }
 
-                        val value = line.text.trim().toIntOrNull()
+                        val number = line.text.trim().toIntOrNull()
                             ?: continue
 
-                        if (value !in 3..18) continue
-
-                        candidates.add(
-                            Pair(rect.centerX(), value)
-                        )
+                        if (number in 3..18) {
+                            values.add(rect.centerX() to number)
+                        }
                     }
                 }
 
-                val sorted = candidates.sortedBy { it.first }
-
-                val unique = mutableListOf<Pair<Int, Int>>()
-
-                for (item in sorted) {
-                    val previous = unique.lastOrNull()
-
-                    if (previous == null ||
-                        item.first - previous.first > 12
-                    ) {
-                        unique.add(item)
-                    }
-                }
-
-                val outcomes = unique
+                val history = values
+                    .sortedBy { it.first }
                     .takeLast(21)
-                    .mapNotNull { item ->
-                        when (item.second) {
+                    .mapNotNull {
+                        when (it.second) {
                             in 4..10 -> false
                             in 11..17 -> true
                             else -> null
@@ -383,97 +351,66 @@ class OverlayService : Service() {
 
                 bitmap.recycle()
 
-                if (outcomes.size < 6) {
-                    finishCapture("KHÔNG ĐỌC ĐỦ CẦU")
-                    return@addOnSuccessListener
+                if (history.size < 6) {
+                    showResult("KHÔNG ĐỌC ĐỦ CẦU")
+                } else {
+                    showResult(analyze(history))
                 }
-
-                val prediction = analyze(outcomes)
-
-                finishCapture(prediction)
-
             }
             .addOnFailureListener {
                 bitmap.recycle()
-                finishCapture("ĐỌC CẦU THẤT BẠI")
+                showResult("LỖI NHẬN DIỆN")
             }
     }
 
     private fun analyze(history: List<Boolean>): String {
-        val lastA = history[history.size - 2]
-        val lastB = history.last()
+        val tai = history.count { it }
+        val xiu = history.size - tai
 
-        var taiAfterPattern = 0
-        var xiuAfterPattern = 0
-
-        for (i in 0 until history.size - 2) {
-            if (history[i] == lastA &&
-                history[i + 1] == lastB
-            ) {
-                if (history[i + 2]) {
-                    taiAfterPattern++
-                } else {
-                    xiuAfterPattern++
-                }
-            }
-        }
-
-        val matches = taiAfterPattern + xiuAfterPattern
-
-        val taiProbability: Double
-
-        if (matches >= 2) {
-            taiProbability =
-                (taiAfterPattern + 1.0) / (matches + 2.0)
-        } else {
-            val taiCount = history.count { it }
-            taiProbability =
-                (taiCount + 1.0) / (history.size + 2.0)
-        }
-
+        val p = (tai + 1.0) / (history.size + 2.0)
         val confidence = (
-            maxOf(taiProbability, 1.0 - taiProbability) * 100
+            maxOf(p, 1.0 - p) * 100
         ).toInt().coerceIn(50, 65)
 
-        return if (taiProbability >= 0.5) {
+        return if (p >= 0.5) {
             "TÀI — $confidence%"
         } else {
             "XỈU — $confidence%"
         }
     }
 
-    private fun finishCapture(message: String) {
-        resultText?.apply {
-            text = message
-            setTextColor(
-                when {
-                    message.startsWith("TÀI") -> Color.YELLOW
-                    message.startsWith("XỈU") -> Color.CYAN
-                    else -> Color.WHITE
-                }
-            )
+    private fun showResult(message: String) {
+        handler.post {
+            resultText?.apply {
+                text = message
+                setTextColor(
+                    when {
+                        message.startsWith("TÀI") -> Color.YELLOW
+                        message.startsWith("XỈU") -> Color.CYAN
+                        else -> Color.WHITE
+                    }
+                )
+            }
+            showOverlayAgain()
         }
-
-        showOverlayAgain()
-        capturing = false
     }
 
     override fun onDestroy() {
+        waiting = false
+        captureTimeout?.let { handler.removeCallbacks(it) }
+
         try {
-            virtualDisplay?.release()
+            display?.release()
             reader?.close()
             projection?.stop()
             recognizer.close()
 
             panel?.let {
-                if (it.isAttachedToWindow) {
-                    wm.removeView(it)
-                }
+                if (it.isAttachedToWindow) wm.removeView(it)
             }
         } catch (_: Exception) {
         }
 
-        panel = null
         super.onDestroy()
     }
 }
