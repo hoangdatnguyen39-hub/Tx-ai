@@ -25,7 +25,6 @@ import android.os.HandlerThread
 import android.os.IBinder
 import android.provider.Settings
 import android.view.Gravity
-import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
@@ -42,6 +41,7 @@ class OverlayService : Service() {
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
         private const val CHANNEL_ID = "tx_ai_capture"
+        private const val TOTAL_POINTS = 21
     }
 
     private lateinit var wm: WindowManager
@@ -70,7 +70,6 @@ class OverlayService : Service() {
         flags: Int,
         startId: Int
     ): Int {
-
         val resultCode =
             intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
 
@@ -110,7 +109,6 @@ class OverlayService : Service() {
             captureThread = HandlerThread("TX-AI-Capture").apply {
                 start()
             }
-
             captureHandler = Handler(captureThread!!.looper)
 
             imageReader = ImageReader.newInstance(
@@ -127,7 +125,6 @@ class OverlayService : Service() {
 
                     try {
                         val bitmap = imageToBitmap(image)
-
                         synchronized(bitmapLock) {
                             lastBitmap?.recycle()
                             lastBitmap = bitmap
@@ -169,7 +166,6 @@ class OverlayService : Service() {
                 "Lỗi: ${e.message}",
                 Toast.LENGTH_LONG
             ).show()
-
             stopSelf()
         }
 
@@ -217,7 +213,6 @@ class OverlayService : Service() {
         val buffer = plane.buffer
         val pixelStride = plane.pixelStride
         val rowStride = plane.rowStride
-
         val rowPadding = rowStride - pixelStride * image.width
 
         val fullBitmap = Bitmap.createBitmap(
@@ -252,7 +247,6 @@ class OverlayService : Service() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(16, 12, 16, 12)
-
             background = GradientDrawable().apply {
                 setColor(Color.rgb(25, 25, 25))
                 cornerRadius = 18f
@@ -261,7 +255,7 @@ class OverlayService : Service() {
         }
 
         val title = TextView(this).apply {
-            text = "TX AI - PHÂN TÍCH CẦU"
+            text = "TX AI - ĐỌC VÀ PHÂN TÍCH CẦU"
             textSize = 15f
             setTextColor(Color.YELLOW)
         }
@@ -274,7 +268,7 @@ class OverlayService : Service() {
         }
 
         val analyze = Button(this).apply {
-            text = "ĐỌC LỊCH SỬ VÀ DỰ ĐOÁN"
+            text = "ĐỌC 21 KẾT QUẢ VÀ DỰ ĐOÁN"
             setOnClickListener {
                 analyzeScreen()
             }
@@ -312,18 +306,16 @@ class OverlayService : Service() {
         if (analyzing) return
 
         analyzing = true
-        status?.text = "Đang chuẩn bị chụp biểu đồ..."
+        status?.text = "Đang chụp biểu đồ..."
 
-        // Ẩn cửa sổ nổi để không che dữ liệu.
-        panel?.visibility = View.INVISIBLE
+        panel?.visibility = android.view.View.INVISIBLE
 
-        // Đợi màn hình cập nhật ảnh sau khi ẩn cửa sổ.
         mainHandler.postDelayed({
             val bitmap = synchronized(bitmapLock) {
                 lastBitmap?.copy(Bitmap.Config.ARGB_8888, false)
             }
 
-            panel?.visibility = View.VISIBLE
+            panel?.visibility = android.view.View.VISIBLE
 
             if (bitmap == null) {
                 analyzing = false
@@ -331,36 +323,56 @@ class OverlayService : Service() {
                 return@postDelayed
             }
 
-            readChart(bitmap)
+            recognizer = recognizer ?: TextRecognition.getClient(
+                TextRecognizerOptions.DEFAULT_OPTIONS
+            )
+
+            status?.text = "Đang đọc từng ô trong biểu đồ..."
+            val scores = mutableListOf<Int?>()
+            readSlot(0, bitmap, scores)
 
         }, 700)
     }
 
-    private fun readChart(bitmap: Bitmap) {
-        var crop: Bitmap? = null
-        var enlarged: Bitmap? = null
+    /*
+     * Tọa độ được căn theo ảnh Sun.win bạn gửi.
+     * Mỗi lần chỉ OCR một vị trí trong 21 vị trí.
+     */
+    private fun readSlot(
+        index: Int,
+        bitmap: Bitmap,
+        scores: MutableList<Int?>
+    ) {
+        if (index >= TOTAL_POINTS) {
+            finishReading(bitmap, scores)
+            return
+        }
 
         try {
-            // Vị trí biểu đồ tổng điểm theo tỷ lệ màn hình.
-            val left = (bitmap.width * 0.29f).toInt()
-            val top = (bitmap.height * 0.28f).toInt()
-            val right = (bitmap.width * 0.72f).toInt()
-            val bottom = (bitmap.height * 0.53f).toInt()
+            val width = bitmap.width
+            val height = bitmap.height
 
-            if (
-                left < 0 ||
-                top < 0 ||
-                right > bitmap.width ||
-                bottom > bitmap.height ||
-                right <= left ||
-                bottom <= top
-            ) {
-                throw IllegalArgumentException(
-                    "Không xác định được vùng biểu đồ"
-                )
-            }
+            // Tâm điểm đầu và cuối của biểu đồ phía trên.
+            val firstCenter = 0.3066f
+            val lastCenter = 0.7096f
 
-            crop = Bitmap.createBitmap(
+            val centerRatio = firstCenter +
+                (lastCenter - firstCenter) *
+                index / (TOTAL_POINTS - 1).toFloat()
+
+            val centerX = (width * centerRatio).toInt()
+            val halfWidth = (width * 0.0092f).toInt().coerceAtLeast(3)
+
+            val left = (centerX - halfWidth).coerceIn(0, width - 1)
+            val right = (centerX + halfWidth).coerceIn(left + 1, width)
+
+            val top = (height * 0.285f).toInt().coerceIn(0, height - 1)
+            val bottom = (height * 0.527f).toInt().coerceIn(
+                top + 1,
+                height
+            )
+
+            val crop = Bitmap.createBitmap(
                 bitmap,
                 left,
                 top,
@@ -368,163 +380,167 @@ class OverlayService : Service() {
                 bottom - top
             )
 
-            enlarged = Bitmap.createScaledBitmap(
-                crop!!,
-                crop!!.width * 3,
-                crop!!.height * 3,
+            val enlarged = Bitmap.createScaledBitmap(
+                crop,
+                crop.width * 5,
+                crop.height * 5,
                 true
             )
 
-            crop?.recycle()
-            crop = null
-
-            if (recognizer == null) {
-                recognizer = TextRecognition.getClient(
-                    TextRecognizerOptions.DEFAULT_OPTIONS
-                )
-            }
+            crop.recycle()
 
             recognizer!!.process(
-                InputImage.fromBitmap(enlarged!!, 0)
+                InputImage.fromBitmap(enlarged, 0)
             )
                 .addOnSuccessListener { result ->
-                    val detected = result.textBlocks
+                    val regex = Regex("""(?<!\d)(1[0-8]|[3-9])(?!\d)""")
+
+                    val candidates = result.textBlocks
                         .flatMap { it.lines }
                         .flatMap { it.elements }
-                        .mapNotNull { element ->
-
-                            val box = element.boundingBox
-                                ?: return@mapNotNull null
-
-                            val value = element.text
-                                .replace("O", "0")
-                                .replace("o", "0")
-                                .replace("I", "1")
-                                .replace("l", "1")
-                                .trim()
-                                .toIntOrNull()
-                                ?: return@mapNotNull null
-
-                            if (value !in 3..18) {
-                                return@mapNotNull null
-                            }
-
-                            Pair(
-                                box.centerX().toFloat(),
-                                value
-                            )
+                        .flatMap { element ->
+                            regex.findAll(
+                                element.text
+                                    .replace("O", "0")
+                                    .replace("o", "0")
+                                    .replace("I", "1")
+                                    .replace("l", "1")
+                            ).mapNotNull {
+                                it.value.toIntOrNull()
+                            }.toList()
                         }
-                        .sortedBy { it.first }
+                        .filter { it in 3..18 }
 
-                    // Loại các phần tử OCR trùng vị trí.
-                    val points = mutableListOf<Pair<Float, Int>>()
-                    val minDistance = enlarged!!.width * 0.022f
-
-                    for (item in detected) {
-                        val previous = points.lastOrNull()
-
-                        if (
-                            previous == null ||
-                            item.first - previous.first > minDistance
-                        ) {
-                            points.add(item)
-                        }
-                    }
-
-                    val scores = points.map { it.second }
-
-                    if (scores.size < 15) {
-                        status?.text =
-                            "ĐỌC ĐƯỢC ${scores.size} ĐIỂM\n" +
-                            "Chưa đủ dữ liệu để phân tích.\n" +
-                            "Hãy thử lại khi biểu đồ rõ hơn."
-                        return@addOnSuccessListener
-                    }
-
-                    val outcomes = scores.map {
-                        if (it >= 11) "T" else "X"
-                    }
-
-                    val prediction = predictNext(outcomes)
-
-                    status?.text =
-                        "ĐÃ ĐỌC: ${scores.size} ĐIỂM\n\n" +
-                        "TỔNG ĐIỂM:\n" +
-                        scores.joinToString(" - ") +
-                        "\n\nLỊCH SỬ:\n" +
-                        outcomes.joinToString(" - ") +
-                        "\n\n" +
-                        prediction
+                    scores.add(candidates.firstOrNull())
                 }
-                .addOnFailureListener { error ->
-                    status?.text = "Lỗi OCR: ${error.message}"
+                .addOnFailureListener {
+                    scores.add(null)
                 }
                 .addOnCompleteListener {
-                    enlarged?.recycle()
-                    bitmap.recycle()
-                    analyzing = false
+                    enlarged.recycle()
+
+                    if (index == TOTAL_POINTS - 1) {
+                        finishReading(bitmap, scores)
+                    } else {
+                        readSlot(index + 1, bitmap, scores)
+                    }
                 }
 
         } catch (e: Exception) {
-            crop?.recycle()
-            enlarged?.recycle()
-            bitmap.recycle()
+            scores.add(null)
 
+            if (index == TOTAL_POINTS - 1) {
+                finishReading(bitmap, scores)
+            } else {
+                readSlot(index + 1, bitmap, scores)
+            }
+        }
+    }
+
+    private fun finishReading(
+        bitmap: Bitmap,
+        scores: List<Int?>
+    ) {
+        try {
+            val validCount = scores.count { it != null }
+
+            if (scores.size != TOTAL_POINTS || validCount != TOTAL_POINTS) {
+                val missing = scores.mapIndexedNotNull { index, value ->
+                    if (value == null) index + 1 else null
+                }
+
+                status?.text =
+                    "CHƯA ĐỌC ĐỦ 21 KẾT QUẢ\n" +
+                    "Đọc được: $validCount/21\n" +
+                    "Ô chưa rõ: ${missing.joinToString(", ")}\n\n" +
+                    "Hãy đóng bảng che biểu đồ hoặc thử chụp lại."
+
+                return
+            }
+
+            val values = scores.filterNotNull()
+
+            val outcomes = values.map { score ->
+                if (score >= 11) "T" else "X"
+            }
+
+            status?.text =
+                "ĐÃ ĐỌC ĐỦ 21 KẾT QUẢ\n" +
+                "Đang phân tích..."
+
+            val prediction = predictNext(outcomes)
+
+            status?.text =
+                "ĐÃ ĐỌC: 21/21 KẾT QUẢ\n\n" +
+                "TỔNG ĐIỂM:\n" +
+                values.joinToString(" - ") +
+                "\n\nTÀI / XỈU:\n" +
+                outcomes.joinToString(" - ") +
+                "\n\n" +
+                prediction
+
+        } catch (e: Exception) {
+            status?.text = "Lỗi xử lý: ${e.message}"
+        } finally {
+            bitmap.recycle()
             analyzing = false
-            status?.text = "Lỗi đọc biểu đồ: ${e.message}"
         }
     }
 
     private fun predictNext(outcomes: List<String>): String {
-        if (outcomes.size < 15) {
-            return "Không đủ dữ liệu để phân tích"
+        if (outcomes.size != TOTAL_POINTS) {
+            return "Không đủ dữ liệu để dự đoán."
         }
 
-        for (length in minOf(5, outcomes.size - 1) downTo 2) {
-            val pattern = outcomes.takeLast(length)
+        val history = outcomes.joinToString("")
+
+        // Tìm mẫu lịch sử giống đoạn cuối, rồi xem kết quả sau mẫu đó.
+        for (length in 5 downTo 2) {
+            val pattern = history.takeLast(length)
 
             var tai = 0
             var xiu = 0
 
-            for (i in 0 until outcomes.size - length) {
-                val oldPattern = outcomes.subList(
-                    i,
-                    i + length
-                )
+            for (i in 0 until history.length - length) {
+                val oldPattern = history.substring(i, i + length)
 
                 if (oldPattern == pattern) {
-                    when (outcomes[i + length]) {
-                        "T" -> tai++
-                        "X" -> xiu++
+                    when (history.getOrNull(i + length)) {
+                        'T' -> tai++
+                        'X' -> xiu++
                     }
                 }
             }
 
-            if (tai + xiu >= 3 && tai != xiu) {
-                val prediction =
-                    if (tai > xiu) "TÀI" else "XỈU"
+            val total = tai + xiu
 
-                return "DỰ ĐOÁN THAM KHẢO: $prediction\n" +
-                    "Mẫu trùng: ${tai + xiu} lần\n" +
+            if (total >= 2 && tai != xiu) {
+                val choice = if (tai > xiu) "TÀI" else "XỈU"
+                val rate = maxOf(tai, xiu) * 100 / total
+
+                return "DỰ ĐOÁN THAM KHẢO: $choice\n" +
+                    "Mẫu $pattern xuất hiện trước: $total lần\n" +
+                    "Kết quả tiếp theo trùng lựa chọn: $rate%\n" +
                     "Tài: $tai | Xỉu: $xiu"
             }
         }
 
+        // Nếu không tìm được mẫu lặp đủ dữ liệu, chỉ báo xu hướng ngắn hạn.
         val recent = outcomes.takeLast(8)
         val tai = recent.count { it == "T" }
         val xiu = recent.count { it == "X" }
 
         if (tai == xiu) {
-            return "CHƯA CÓ XU HƯỚNG RÕ\n" +
-                "Tài: $tai | Xỉu: $xiu"
+            return "CHƯA CÓ MẪU RÕ RÀNG\n" +
+                "8 phiên gần nhất: Tài $tai - Xỉu $xiu\n" +
+                "Chưa đưa ra lựa chọn."
         }
 
-        val prediction =
-            if (tai > xiu) "TÀI" else "XỈU"
+        val choice = if (tai > xiu) "TÀI" else "XỈU"
 
-        return "DỰ ĐOÁN THAM KHẢO: $prediction\n" +
-            "8 kết quả gần nhất:\n" +
-            "Tài: $tai | Xỉu: $xiu"
+        return "XU HƯỚNG THAM KHẢO: $choice\n" +
+            "8 phiên gần nhất: Tài $tai - Xỉu $xiu\n" +
+            "Chưa tìm thấy mẫu lặp đủ mạnh."
     }
 
     override fun onDestroy() {
@@ -553,7 +569,6 @@ class OverlayService : Service() {
                 wm.removeView(it)
             }
         }
-
         panel = null
 
         recognizer?.close()
