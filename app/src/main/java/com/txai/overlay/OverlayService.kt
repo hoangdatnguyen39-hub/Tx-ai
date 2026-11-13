@@ -8,6 +8,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -25,6 +26,7 @@ import android.os.HandlerThread
 import android.os.IBinder
 import android.provider.Settings
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
@@ -41,10 +43,14 @@ class OverlayService : Service() {
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
         private const val CHANNEL_ID = "tx_ai_capture"
-        private const val TOTAL_POINTS = 21
+        private const val PREFS_NAME = "tx_ai_memory"
+        private const val HISTORY_KEY = "latest_10"
+        private const val TOTAL_POINTS = 10
     }
 
     private lateinit var wm: WindowManager
+    private lateinit var prefs: SharedPreferences
+
     private var panel: LinearLayout? = null
     private var status: TextView? = null
 
@@ -57,7 +63,6 @@ class OverlayService : Service() {
 
     private var captureThread: HandlerThread? = null
     private var captureHandler: Handler? = null
-
     private val mainHandler = Handler(android.os.Looper.getMainLooper())
 
     private var recognizer: TextRecognizer? = null
@@ -65,11 +70,17 @@ class OverlayService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+    }
+
     override fun onStartCommand(
         intent: Intent?,
         flags: Int,
         startId: Int
     ): Int {
+
         val resultCode =
             intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
 
@@ -109,6 +120,7 @@ class OverlayService : Service() {
             captureThread = HandlerThread("TX-AI-Capture").apply {
                 start()
             }
+
             captureHandler = Handler(captureThread!!.looper)
 
             imageReader = ImageReader.newInstance(
@@ -125,6 +137,7 @@ class OverlayService : Service() {
 
                     try {
                         val bitmap = imageToBitmap(image)
+
                         synchronized(bitmapLock) {
                             lastBitmap?.recycle()
                             lastBitmap = bitmap
@@ -193,7 +206,7 @@ class OverlayService : Service() {
 
         val notification = builder
             .setContentTitle("TX AI đang hoạt động")
-            .setContentText("Đang đọc biểu đồ lịch sử")
+            .setContentText("Đang lưu 10 kết quả gần nhất")
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .build()
 
@@ -236,6 +249,24 @@ class OverlayService : Service() {
         return result
     }
 
+    private fun loadHistory(): List<Int> {
+        val saved = prefs.getString(HISTORY_KEY, "") ?: ""
+
+        return saved.split(",")
+            .mapNotNull { it.toIntOrNull() }
+            .filter { it in 3..18 }
+            .take(TOTAL_POINTS)
+    }
+
+    private fun saveHistory(values: List<Int>) {
+        prefs.edit()
+            .putString(
+                HISTORY_KEY,
+                values.take(TOTAL_POINTS).joinToString(",")
+            )
+            .apply()
+    }
+
     private fun showOverlay() {
         if (!Settings.canDrawOverlays(this)) {
             stopSelf()
@@ -247,6 +278,7 @@ class OverlayService : Service() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(16, 12, 16, 12)
+
             background = GradientDrawable().apply {
                 setColor(Color.rgb(25, 25, 25))
                 cornerRadius = 18f
@@ -255,20 +287,29 @@ class OverlayService : Service() {
         }
 
         val title = TextView(this).apply {
-            text = "TX AI - ĐỌC VÀ PHÂN TÍCH CẦU"
+            text = "TX AI - BỘ NHỚ 10 KẾT QUẢ"
             textSize = 15f
             setTextColor(Color.YELLOW)
         }
 
+        val oldHistory = loadHistory()
+
         status = TextView(this).apply {
-            text = "Đang chờ biểu đồ lịch sử..."
+            text = if (oldHistory.size == TOTAL_POINTS) {
+                "ĐÃ LƯU 10 KẾT QUẢ\n" +
+                    oldHistory.joinToString(" - ") +
+                    "\n\nBấm đọc để cập nhật."
+            } else {
+                "Chưa có đủ dữ liệu đã lưu.\nBấm đọc biểu đồ để bắt đầu."
+            }
+
             textSize = 13f
             setTextColor(Color.WHITE)
             setPadding(0, 12, 0, 12)
         }
 
         val analyze = Button(this).apply {
-            text = "ĐỌC 21 KẾT QUẢ VÀ DỰ ĐOÁN"
+            text = "ĐỌC 10 KẾT QUẢ MỚI NHẤT"
             setOnClickListener {
                 analyzeScreen()
             }
@@ -308,43 +349,46 @@ class OverlayService : Service() {
         analyzing = true
         status?.text = "Đang chụp biểu đồ..."
 
-        panel?.visibility = android.view.View.INVISIBLE
+        panel?.visibility = View.INVISIBLE
 
         mainHandler.postDelayed({
             val bitmap = synchronized(bitmapLock) {
                 lastBitmap?.copy(Bitmap.Config.ARGB_8888, false)
             }
 
-            panel?.visibility = android.view.View.VISIBLE
+            panel?.visibility = View.VISIBLE
 
             if (bitmap == null) {
                 analyzing = false
-                status?.text = "Không nhận được ảnh màn hình"
+                status?.text = "Không nhận được ảnh màn hình."
                 return@postDelayed
             }
 
-            recognizer = recognizer ?: TextRecognition.getClient(
-                TextRecognizerOptions.DEFAULT_OPTIONS
-            )
+            if (recognizer == null) {
+                recognizer = TextRecognition.getClient(
+                    TextRecognizerOptions.DEFAULT_OPTIONS
+                )
+            }
 
-            status?.text = "Đang đọc từng ô trong biểu đồ..."
-            val scores = mutableListOf<Int?>()
-            readSlot(0, bitmap, scores)
+            status?.text = "Đang đọc từ phải sang trái..."
+
+            val results = mutableListOf<Int?>()
+            readNextPoint(0, bitmap, results)
 
         }, 700)
     }
 
     /*
-     * Tọa độ được căn theo ảnh Sun.win bạn gửi.
-     * Mỗi lần chỉ OCR một vị trí trong 21 vị trí.
+     * Đọc 10 vị trí ngoài cùng bên phải.
+     * Thứ tự lưu: mới nhất trước, cũ hơn sau.
      */
-    private fun readSlot(
+    private fun readNextPoint(
         index: Int,
         bitmap: Bitmap,
-        scores: MutableList<Int?>
+        results: MutableList<Int?>
     ) {
         if (index >= TOTAL_POINTS) {
-            finishReading(bitmap, scores)
+            finishReading(bitmap, results)
             return
         }
 
@@ -352,22 +396,28 @@ class OverlayService : Service() {
             val width = bitmap.width
             val height = bitmap.height
 
-            // Tâm điểm đầu và cuối của biểu đồ phía trên.
-            val firstCenter = 0.3066f
-            val lastCenter = 0.7096f
+            // Biểu đồ có 21 vị trí từ trái sang phải.
+            // Chọn 10 vị trí cuối, tức 10 vị trí bên phải.
+            val chartFirst = 0.3066f
+            val chartLast = 0.7096f
 
-            val centerRatio = firstCenter +
-                (lastCenter - firstCenter) *
-                index / (TOTAL_POINTS - 1).toFloat()
+            val chartIndex = 20 - index
+
+            val centerRatio = chartFirst +
+                (chartLast - chartFirst) *
+                chartIndex / 20f
 
             val centerX = (width * centerRatio).toInt()
-            val halfWidth = (width * 0.0092f).toInt().coerceAtLeast(3)
+            val halfWidth = (width * 0.0095f)
+                .toInt()
+                .coerceAtLeast(4)
 
             val left = (centerX - halfWidth).coerceIn(0, width - 1)
             val right = (centerX + halfWidth).coerceIn(left + 1, width)
 
-            val top = (height * 0.285f).toInt().coerceIn(0, height - 1)
-            val bottom = (height * 0.527f).toInt().coerceIn(
+            // Chỉ lấy biểu đồ tổng điểm phía trên.
+            val top = (height * 0.235f).toInt().coerceIn(0, height - 1)
+            val bottom = (height * 0.425f).toInt().coerceIn(
                 top + 1,
                 height
             )
@@ -411,71 +461,70 @@ class OverlayService : Service() {
                         }
                         .filter { it in 3..18 }
 
-                    scores.add(candidates.firstOrNull())
+                    results.add(candidates.firstOrNull())
                 }
                 .addOnFailureListener {
-                    scores.add(null)
+                    results.add(null)
                 }
                 .addOnCompleteListener {
                     enlarged.recycle()
 
                     if (index == TOTAL_POINTS - 1) {
-                        finishReading(bitmap, scores)
+                        finishReading(bitmap, results)
                     } else {
-                        readSlot(index + 1, bitmap, scores)
+                        readNextPoint(index + 1, bitmap, results)
                     }
                 }
 
         } catch (e: Exception) {
-            scores.add(null)
+            results.add(null)
 
             if (index == TOTAL_POINTS - 1) {
-                finishReading(bitmap, scores)
+                finishReading(bitmap, results)
             } else {
-                readSlot(index + 1, bitmap, scores)
+                readNextPoint(index + 1, bitmap, results)
             }
         }
     }
 
     private fun finishReading(
         bitmap: Bitmap,
-        scores: List<Int?>
+        results: List<Int?>
     ) {
         try {
-            val validCount = scores.count { it != null }
+            val valid = results.count { it != null }
 
-            if (scores.size != TOTAL_POINTS || validCount != TOTAL_POINTS) {
-                val missing = scores.mapIndexedNotNull { index, value ->
+            if (valid != TOTAL_POINTS) {
+                val missing = results.mapIndexedNotNull { index, value ->
                     if (value == null) index + 1 else null
                 }
 
                 status?.text =
-                    "CHƯA ĐỌC ĐỦ 21 KẾT QUẢ\n" +
-                    "Đọc được: $validCount/21\n" +
-                    "Ô chưa rõ: ${missing.joinToString(", ")}\n\n" +
-                    "Hãy đóng bảng che biểu đồ hoặc thử chụp lại."
+                    "ĐỌC ĐƯỢC $valid/10 KẾT QUẢ\n" +
+                    "Vị trí chưa rõ: ${missing.joinToString(", ")}\n\n" +
+                    "Chưa lưu dữ liệu mới.\nHãy thử đọc lại."
 
                 return
             }
 
-            val values = scores.filterNotNull()
+            // Đang theo thứ tự mới nhất -> cũ hơn.
+            val newestFirst = results.filterNotNull()
 
-            val outcomes = values.map { score ->
-                if (score >= 11) "T" else "X"
+            // Lưu lại đúng 10 kết quả mới nhất.
+            saveHistory(newestFirst)
+
+            val outcomesNewestFirst = newestFirst.map {
+                if (it >= 11) "T" else "X"
             }
 
-            status?.text =
-                "ĐÃ ĐỌC ĐỦ 21 KẾT QUẢ\n" +
-                "Đang phân tích..."
-
-            val prediction = predictNext(outcomes)
+            val prediction = predictNext(outcomesNewestFirst)
 
             status?.text =
-                "ĐÃ ĐỌC: 21/21 KẾT QUẢ\n\n" +
-                "TỔNG ĐIỂM:\n" +
-                values.joinToString(" - ") +
+                "ĐÃ LƯU 10 KẾT QUẢ MỚI NHẤT\n" +
+                "(Đọc từ phải sang trái)\n\n" +
+                newestFirst.joinToString(" - ") +
                 "\n\nTÀI / XỈU:\n" +
-                outcomes.joinToString(" - ") +
+                outcomesNewestFirst.joinToString(" - ") +
                 "\n\n" +
                 prediction
 
@@ -487,25 +536,28 @@ class OverlayService : Service() {
         }
     }
 
-    private fun predictNext(outcomes: List<String>): String {
-        if (outcomes.size != TOTAL_POINTS) {
-            return "Không đủ dữ liệu để dự đoán."
+    private fun predictNext(
+        newestFirst: List<String>
+    ): String {
+        if (newestFirst.size != TOTAL_POINTS) {
+            return "Chưa đủ 10 kết quả để phân tích."
         }
 
-        val history = outcomes.joinToString("")
+        // Chuyển thành thứ tự cũ -> mới để phân tích mẫu.
+        val history = newestFirst.reversed()
+        val sequence = history.joinToString("")
 
-        // Tìm mẫu lịch sử giống đoạn cuối, rồi xem kết quả sau mẫu đó.
-        for (length in 5 downTo 2) {
-            val pattern = history.takeLast(length)
+        for (length in 4 downTo 2) {
+            val pattern = sequence.takeLast(length)
 
             var tai = 0
             var xiu = 0
 
-            for (i in 0 until history.length - length) {
-                val oldPattern = history.substring(i, i + length)
+            for (i in 0 until sequence.length - length) {
+                val oldPattern = sequence.substring(i, i + length)
 
                 if (oldPattern == pattern) {
-                    when (history.getOrNull(i + length)) {
+                    when (sequence.getOrNull(i + length)) {
                         'T' -> tai++
                         'X' -> xiu++
                     }
@@ -514,33 +566,30 @@ class OverlayService : Service() {
 
             val total = tai + xiu
 
-            if (total >= 2 && tai != xiu) {
+            if (total >= 1 && tai != xiu) {
                 val choice = if (tai > xiu) "TÀI" else "XỈU"
-                val rate = maxOf(tai, xiu) * 100 / total
 
                 return "DỰ ĐOÁN THAM KHẢO: $choice\n" +
-                    "Mẫu $pattern xuất hiện trước: $total lần\n" +
-                    "Kết quả tiếp theo trùng lựa chọn: $rate%\n" +
+                    "Mẫu cầu: $pattern\n" +
+                    "Lần trùng trước: $total\n" +
                     "Tài: $tai | Xỉu: $xiu"
             }
         }
 
-        // Nếu không tìm được mẫu lặp đủ dữ liệu, chỉ báo xu hướng ngắn hạn.
-        val recent = outcomes.takeLast(8)
-        val tai = recent.count { it == "T" }
-        val xiu = recent.count { it == "X" }
+        val tai = history.count { it == "T" }
+        val xiu = history.count { it == "X" }
 
         if (tai == xiu) {
-            return "CHƯA CÓ MẪU RÕ RÀNG\n" +
-                "8 phiên gần nhất: Tài $tai - Xỉu $xiu\n" +
-                "Chưa đưa ra lựa chọn."
+            return "CHƯA CÓ XU HƯỚNG RÕ\n" +
+                "10 kết quả: Tài $tai - Xỉu $xiu"
         }
 
         val choice = if (tai > xiu) "TÀI" else "XỈU"
 
-        return "XU HƯỚNG THAM KHẢO: $choice\n" +
-            "8 phiên gần nhất: Tài $tai - Xỉu $xiu\n" +
-            "Chưa tìm thấy mẫu lặp đủ mạnh."
+        return "DỰ ĐOÁN THAM KHẢO: $choice\n" +
+            "Thống kê 10 kết quả:\n" +
+            "Tài: $tai | Xỉu: $xiu\n" +
+            "Chưa có mẫu lặp đủ mạnh."
     }
 
     override fun onDestroy() {
@@ -569,6 +618,7 @@ class OverlayService : Service() {
                 wm.removeView(it)
             }
         }
+
         panel = null
 
         recognizer?.close()
